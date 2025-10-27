@@ -21,12 +21,26 @@ def fetch_resnet50(pretrained=True):
 
 
 
-def build_backbone(name='resnet50', pretrained=True, train_backbone=False):
+def build_deformable_detr_backbone(name='resnet50', pretrained=True, train_backbone=False):
     if name == 'resnet50':
         backbone = fetch_resnet50(pretrained=pretrained)
     elif name == 'resnet101':
 #        backbone = resnet101(pretrained=pretrained)
         raise NotImplementedError("ResNet101 backbone is not implemented yet.")
+    else:
+        raise ValueError(f"Unsupported backbone: {name}")
+
+    for param in backbone.parameters():
+        param.requires_grad = train_backbone
+
+    return backbone
+
+
+def build_detr_backbone(name='resnet50', pretrained=True, train_backbone=False):
+    if name == 'resnet50':
+        backbone = resnet50(pretrained=pretrained)
+    elif name == 'resnet101':
+        backbone = resnet101(pretrained=pretrained)
     else:
         raise ValueError(f"Unsupported backbone: {name}")
 

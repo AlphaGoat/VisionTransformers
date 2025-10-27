@@ -26,43 +26,9 @@ class PositionalEmbedding(torch.nn.Module):
         pass
 
 
-class AttentionLayer(torch.nn.Module):
-    def __init__(self, d_model, nhead):
-        super().__init__()
-        self.d_model = d_model
-        self.nhead = nhead
-        self.W_q = torch.nn.Linear(d_model, d_model)
-        self.W_k = torch.nn.Linear(d_model, d_model)
-        self.W_v = torch.nn.Linear(d_model, d_model)
-
-    def forward(self, query, key, value):
-        Q = self.W_q(query)
-        K = self.W_k(key)
-        V = self.W_v(value)
-
-        softmax = torch.nn.Softmax(dim=-1)
-
-        attn_output = torch.bmm(softmax(torch.bmm(Q, K.transpose(-2, -1)) / (self.d_model ** 0.5)), V)
-        return attn_output
 
 
-class MultiHeadAttention(torch.nn.Module):
-    def __init__(self, d_model, nhead):
-        super().__init__()
-        self.d_model = d_model
-        self.nhead = nhead
-        assert d_model % nhead == 0, "d_model must be divisible by nhead"
-        self.attention_layers = torch.nn.ModuleList([AttentionLayer(d_model // nhead, nhead) for _ in range(nhead)])
-        self.linear = torch.nn.Linear(d_model, d_model)
-
-    def forward(self, query, key, value):
-        attn_outputs = [attn_layer(query, key, value) for attn_layer in self.attention_layers]
-        concat_attn = torch.cat(attn_outputs, dim=-1)
-        output = self.linear(concat_attn)
-        return output
-
-
-class DeformableAttention(torch.nn.Module):
+class DeformableSelfAttention(torch.nn.Module):
     def __init__(self, d_model, nhead, num_points):
         super().__init__()
         self.d_model = d_model
@@ -108,6 +74,21 @@ class DeformableAttention(torch.nn.Module):
         return output
 
 
+class DeformableCrossAttention(torch.nn.Module):
+    def __init__(self, d_model, nhead, num_points):
+        super().__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        self.num_points = num_points
+        self.W_q = torch.nn.Linear(d_model, d_model)
+        self.W_k = torch.nn.Linear(d_model, d_model)
+        self.W_v = torch.nn.Linear(d_model, d_model)
+        self.linear = torch.nn.Linear(d_model, d_model)
+
+    def forward(self, query, key, value, reference_points):
+        pass
+
+
 class DeformableDETRBase(torch.nn.Module):
     def __init__(self, backbone, num_classes, num_queries):
         super().__init__()
@@ -135,8 +116,8 @@ class DeformableDETRBase(torch.nn.Module):
 
             # Encoder attention mechanism
             current_feature = feature
-            for _ in range(4):  # Example: 4 layers of attention
-                attn_output = DeformableAttention(d_model=feature.size(-1), nhead=8)(current_feature + pos_embed, current_feature + pos_embed, current_feature)
+            for _ in range(6):  # Example: 6 layers of attention
+                attn_output = DeformableSelfAttention(d_model=feature.size(-1), nhead=8)(current_feature + pos_embed, current_feature + pos_embed, current_feature)
                 current_feature = attn_output
             encoder_outputs.append(current_feature)
 
@@ -145,8 +126,8 @@ class DeformableDETRBase(torch.nn.Module):
             query_embed = torch.rand(self.num_queries, feature.size(-1))  # Random query embeddings
             pos_embed = PositionalEmbedding()(feature)
             current_query = query_embed.unsqueeze(0).repeat(feature.size(0), 1, 1)  # Batch size replication
-            for _ in range(4):  # Example: 4 layers of attention
-                attn_output = DeformableAttention(d_model=feature.size(-1), nhead=8)(current_query + pos_embed, feature + pos_embed, feature)
+            for _ in range(6):  # Example: 6 layers of attention
+                attn_output = DeformableSelfAttention(d_model=feature.size(-1), nhead=8)(current_query + pos_embed, feature + pos_embed, feature)
                 current_query = attn_output
 
         # Detection head (classification and bounding box regression)
