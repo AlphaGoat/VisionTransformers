@@ -5,6 +5,7 @@ Author: Peter Thomas
 Date: 07 October 2025
 """
 import torch
+from torch.utils import cpp_extension
 
 
 class InverseSigmoid(torch.nn.Module):

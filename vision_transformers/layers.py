@@ -5,6 +5,7 @@ Author: Peter Thomas
 Date: 07 October 2025
 """
 import torch
+from vision_transformers.utils import get_x_positions, get_y_positions
 
 
 class AttentionLayer(torch.nn.Module):
@@ -44,18 +45,34 @@ class MultiHeadAttention(torch.nn.Module):
 
 
 class SinusoidalPositionalEncoding(torch.nn.Module):
-    def __init__(self, d_model, max_len=5000):
+    def __init__(self, n_pixels, embed_dim):
         super().__init__()
-        self.d_model = d_model
+        self.n_pixels = n_pixels
+        self.embed_dim = embed_dim // 2 # Since we have x and y positions
 
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
+        # get axis specific positions
+        self.x_positions = get_x_positions(n_pixels)
+        self.y_positions = get_y_positions(n_pixels)
+
+        # Generate positional encodings
+        x_pos_embedding = self.generate_sinusoidal_1d(self.x_positions.unsqueeze(1))
+        y_pos_embedding = self.generate_sinusoidal_1d(self.y_positions.unsqueeze(1))
+
+        # Combine x-axis and y-axis positional encodings
+        pe = torch.cat((x_pos_embedding, y_pos_embedding), dim=-1)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
         x = x + self.pe[:x.size(0), :]
         return x
+
+    def generate_sinusoidal_1d(self, sequence):
+        # Denominator
+        denominator = torch.pow(10000, torch.arange(0, self.embed_dim, 2).float() / self.embed_dim)
+
+        # Create empty tensor for positional encodings
+        pos_encodings = torch.zeros((sequence.size(0), self.embed_dim))
+        denominator = sequence / denominator
+        pos_encodings[:, :, 0::2] = torch.sin(denominator)
+        pos_encodings[:, :, 1::2] = torch.cos(denominator)
+        return pos_encodings

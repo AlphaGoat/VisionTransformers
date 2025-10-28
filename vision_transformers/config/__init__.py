@@ -1,1 +1,1 @@
-from train_config import TrainConfig
+from vision_transformers.config.train_obj_det_config import TrainObjDetConfig

@@ -8,6 +8,35 @@ import numpy as np
 from typing import List, Dict
 
 
+def perform_oda_evaluation(epoch_targets, epoch_outputs) -> List[Dict[str, float]]:
+    """
+    Formats ODA metrics into a readable string.
+
+    Args:
+        oda_metrics: A dictionary containing ODA metrics.
+
+    Returns:
+        A formatted string of ODA metrics.
+    """
+    image_dicts = []
+    for i, batch_out in enumerate(epoch_outputs):
+        for j, out in enumerate(batch_out):
+            image_dict ={
+                'image_id': i * len(batch_out) + j,
+                'detections': out['detections'],
+                'ground_truths': epoch_targets[i][j]['ground_truths']
+            }
+            image_dicts.append(image_dict)
+
+    oda_metric_calculator = ODAMetric(image_dicts)
+    oda_metrics = oda_metric_calculator.compute()
+
+    formatted_metrics = "ODA Metrics:\n"
+    for key, value in oda_metrics.items():
+        formatted_metrics += f"{key}: {value:.4f}\n"
+    return formatted_metrics
+
+
 class ODAMetric:
     def __init__(self, image_dicts, confidence_thresholds=None, iou_thresholds=None, num_classes=80):
         self.reset()

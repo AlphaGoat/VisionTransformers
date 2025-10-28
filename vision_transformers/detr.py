@@ -3,7 +3,6 @@ import torch
 from vision_transformers.layers import MultiHeadAttention, SinusoidalPositionalEncoding
 
 
-
 class DETRBase(torch.nn.Module):
     def __init__(self, backbone, num_classes, num_queries): 
         super().__init__()
@@ -31,7 +30,7 @@ class DETRBase(torch.nn.Module):
 
         # Positional embedding and transformer encoder
         for _ in range(6):  # Example: 6 layers of attention
-            pos_embed = SinusoidalPositionalEncoding(features.size(-1))(features)
+            pos_embed = SinusoidalPositionalEncoding(features.size(-1))(features) # NOTE: addition already performed in forward pass, may remove addition in head input
             attn_output = MultiHeadAttention(d_model=features.size(-1), nhead=8)(features + pos_embed, features + pos_embed, features)
             attn_output = torch.nn.LayerNorm(features.size(-1))(attn_output + features)
             ffn_output = torch.nn.Sequential(
