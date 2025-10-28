@@ -4,9 +4,9 @@ Module for importing different backbones for Deformable DETR.
 Author: Peter Thomas
 Date: 07 October 2025
 """
-import torch
 from torchvision.models import resnet50, resnet101
 from torchvision.models.feature_extraction import create_feature_extractor
+from vision_transformers.backbones.resnet_3d_conv import Resnet50With3dConv
 
 
 def fetch_resnet50(pretrained=True):
@@ -41,6 +41,8 @@ def build_detr_backbone(name='resnet50', pretrained=True, train_backbone=False):
         backbone = resnet50(pretrained=pretrained)
     elif name == 'resnet101':
         backbone = resnet101(pretrained=pretrained)
+    elif name == 'resnet50_with_3dconv':
+        backbone = Resnet50With3dConv(classification_head=False)
     else:
         raise ValueError(f"Unsupported backbone: {name}")
 
