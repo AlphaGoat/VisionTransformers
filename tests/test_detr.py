@@ -52,8 +52,8 @@ class TestDETRModel(unittest.TestCase):
         """
         Test if the DETR model can overfit on a single image dataset.
         """
-        test_image_path = "tests/overfit_data/cat_collects_rocks.jpg"
-        test_annotation_path = "tests/overfit_data/cat_collects_rocks.json"
+        test_image_path = "tests/overfit_data/cat_collects_rocks/cat_collects_rocks.jpg"
+        test_annotation_path = "tests/overfit_data/cat_collects_rocks/cat_collects_rocks.json"
         with open(test_annotation_path, 'r') as f:
             data = json.load(f)["data"]
             labels = []
@@ -65,7 +65,8 @@ class TestDETRModel(unittest.TestCase):
             dummy_targets.append({"labels": labels, "boxes": boxes})
 
         image = Image.open(test_image_path).convert("RGB")
-        image = np.asarray(image)
+        image = np.asarray(image).permute(2, 0, 1)  # Convert to (C, H, W)
+        image = image / 255.0  # Normalize to [0, 1]
 
         model, criterion = build_model(name='detr', backbone='resnet50')
         model.to(torch.device('cpu'))
