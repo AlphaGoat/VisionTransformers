@@ -1,0 +1,20 @@
+#[build-system]
+#requires = ["setuptools", "wheel", "torch==2.7.1+cu118"]
+#build-backend = "setuptools.build_meta"
+[general]
+name = "vision_transformers"
+universal = false
+
+[torch]
+src = [
+    "vision_transformers/torch-ext/torch_binding.cpp",
+    "vision_transformers/torch-ext/torch_binding.h"
+]
+
+# Defines the CUDA kernel itself
+[kernel.bilinear_interpolate]
+backend = "cuda"
+depends = ["torch"]
+src = [
+    "vision_transformers/cuda/deformable_attn_kernel.cu"
+]
