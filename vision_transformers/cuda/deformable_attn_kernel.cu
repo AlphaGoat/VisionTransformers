@@ -2,62 +2,9 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <torch/extension.h>
+#include "common.cuh"
 
 
-__global__ void matrix_add_forward(
-    const float* A,
-    const float* B,
-    float* C,
-    int N
-) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < N) {
-        C[idx] = A[idx] + B[idx];
-    }
-}
-
-
-__global__ void matrix_add_backward(
-    const float* grad_C,
-    float* grad_A,
-    float* grad_B,
-    int N
-) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < N) {
-        grad_A[idx] = grad_C[idx];
-        grad_B[idx] = grad_C[idx];
-    }
-}
-
-
-__global__ void matrix_mul_forward(
-    const float* A,
-    const float* B,
-    float* C,
-    int N
-) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < N) {
-        C[idx] = A[idx] * B[idx];
-    }
-}
-
-
-__global__ void matrix_mul_backward(
-    const float* grad_C,
-    const float* A,
-    const float* B,
-    float* grad_A,
-    float* grad_B,
-    int N
-) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < N) {
-        grad_A[idx] = grad_C[idx] * B[idx];
-        grad_B[idx] = grad_C[idx] * A[idx];
-    }
-}
 
 
 
@@ -79,7 +26,7 @@ __global__ void matrix_mul_backward(
 //}
 
 
-__global__ void bilinear_interpolate_kernel(
+__global__ void bilinear_interpolate_forward_kernel(
     const float* input,
     float* output,
     int height,
@@ -111,33 +58,37 @@ __global__ void bilinear_interpolate_kernel(
 }
 
 
-void deformable_attn(
-    const torch::Tensor& query,
-    const torch::Tensor& key,
-    const torch::Tensor& value,
-    const torch::Tensor& reference_points,
-    const torch::Tensor& offsets,
-    torch::Tensor& output
+__global__ void bilinear_interpolate_backward_kernel(
+    const float* grad_output,
+    float* grad_input,
+    int height,
+    int width,
+    float *y,
+    float *x,
+    int N
 ) {
-    const int batch_size = query.size(0);
-    const int threads = 256;
-    const int blocks = (batch_size + threads - 1) / threads;
+    // Backward pass implementation goes here
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-//    deformable_attn_kernel<<<blocks, threads>>>(
-//        query.data_ptr<float>(),
-//        key.data_ptr<float>(),
-//        value.data_ptr<float>(),
-//        reference_points.data_ptr<float>(),
-//        offsets.data_ptr<float>(),
-//        output.data_ptr<float>(),
-//        batch_size
-//    );
+    if (idx >= N) return;
 
-    cudaDeviceSynchronize();
+    // Compute gradients with respect to input
+    // (This is a placeholder; actual gradient computation would be more complex)
+    int x1 = floor(x[idx]);
+    int x2 = ceil(x[idx]);
+    int y1 = floor(y[idx]);
+    int y2 = ceil(y[idx]);
+
+    float grad = grad_output[idx] / 4.0f; // Distribute gradient equally for simplicity
+
+    atomicAdd(&grad_input[y1 * width + x1], grad);
+    atomicAdd(&grad_input[y1 * width + x2], grad);
+    atomicAdd(&grad_input[y2 * width + x1], grad);
+    atomicAdd(&grad_input[y2 * width + x2], grad);
 }
 
 
-torch::Tensor bilinear_interpolate(
+torch::Tensor bilinear_interpolate_forward(
     const torch::Tensor& input,
     torch::Tensor& y,
     torch::Tensor& x
@@ -169,6 +120,55 @@ torch::Tensor bilinear_interpolate(
     cudaDeviceSynchronize();
     return output;
 }
+
+
+torch::Tensor deformable_attn_forward(
+    const torch::Tensor& query,
+    const torch::Tensor& key,
+    const torch::Tensor& value,
+    const torch::Tensor& reference_points,
+    const torch::Tensor& feature_map,
+    const torch::Tensor& W_offsets,
+    const torch::Tensor& B_offsets,
+    torch::Tensor& output
+) {
+    /* Deformable attention for a single head */
+
+    const int batch_size = query.size(0);
+    const int threads = 256;
+    const int blocks = (batch_size + threads - 1) / threads;
+
+    // Get sampling offsets
+    torch::Tensor offsets = batch_bias_add_forward(batch_matrix_mul_forward(W_offsets, query), B_offsets);
+
+    // Get sampling points
+    torch::Tensor sampling_points = add_offsets_forward(&reference_points, &offsets);
+
+    // Generate attention weights
+    torch::Tensor attention_weights = batch_matrix_mul_forward(query, key.transpose(1, 2));
+
+    // sampling_points shape: (batch_size, num_sampling_points, 2)
+    // Get sampling points from input feature map
+    torch::Tensor sampled_features = bilinear_interpolate_forward(feature_map, sampling_points);
+
+    // Shape: (batch_size, num_sampling_points, C)
+    // Compute attention output
+    output = torch::matmul(attention_weights, sampled_features);
+
+//    deformable_attn_kernel<<<blocks, threads>>>(
+//        query.data_ptr<float>(),
+//        key.data_ptr<float>(),
+//        value.data_ptr<float>(),
+//        reference_points.data_ptr<float>(),
+//        offsets.data_ptr<float>(),
+//        output.data_ptr<float>(),
+//        batch_size
+//    );
+
+    cudaDeviceSynchronize();
+}
+
+
 
 
 //// Pybind11 module is a macro that creates the entry point for the Python module.
