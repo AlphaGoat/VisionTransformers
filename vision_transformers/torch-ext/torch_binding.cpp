@@ -30,6 +30,23 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::arg("grad_C"), py::arg("A"), py::arg("B");
 }
 
+torch::Tensor batch_softmax_forward(
+    const torch::Tensor& input
+);
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("batch_softmax_forward", &batch_softmax_forward, "Batch Softmax Forward (CUDA)");
+    py::arg("input");
+}
+
+torch::Tensor batch_softmax_backward(
+    const torch::Tensor& grad_output,
+    const torch::Tensor& softmax_output
+);
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("batch_softmax_backward", &batch_softmax_backward, "Batch Softmax Backward (CUDA)");
+    py::arg("grad_output"), py::arg("softmax_output");
+}
+
 //#include <torch/library.h>
 //#include "registration.h"
 //#include "torch_binding.h"

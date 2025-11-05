@@ -162,20 +162,100 @@ __global__ void batch_softmax_forward_kernel(
     const float* A,
     float* C,
     int BATCH_SIZE,
-    int N,
-    int M,
-    int AXIS
+    int NUM_ROWS,
+    int NUM_COLS
+//    int AXIS NOTE: May add later, for now assume AXIS = -1
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < BATCH_SIZE * M) {
-        int batch_num = idx / M;
-        int j = idx % M;       // Column index
+    if (idx < BATCH_SIZE * NUM_ROWS * NUM_COLS) {
+        int batch_num = idx / (NUM_ROWS * NUM_COLS);
+        int col_idx = (idx % (NUM_ROWS * NUM_COLS)) % NUM_COLS; // Column index
+        int row_idx = (idx % (NUM_ROWS * NUM_COLS)) / NUM_COLS; // Row index
         float denom = 0.0f;
-        for (int i = 0; i < N; ++i) {
-            denom += expf(A[batch_num * N * M + i * M + j]);
+        for (int i = 0; i < NUM_COLS; ++i) {
+            denom += expf(A[batch_num * NUM_ROWS * NUM_COLS + row_idx * NUM_COLS + i]);
         }
-        C[batch_num * M + j] = expf(A[batch_num * N * M + i * M + j]) / denom;
+        C[(batch_num * NUM_COLS * NUM_ROWS) + (row_idx * NUM_COLS) + col_idx] = expf(A[batch_num * NUM_ROWS * NUM_COLS + row_idx * NUM_COLS + col_idx]) / denom;
     }
+}
+
+
+__global__ void batch_softmax_backward_kernel(
+    const float* grad_C,
+    const float* A,
+    const float *grad_A,
+    int BATCH_SIZE,
+    int NUM_ROWS,
+    int NUM_COLS
+//    int AXIS NOTE: May add later, for now assume AXIS = -1
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < BATCH_SIZE * NUM_ROWS * NUM_COLS) {
+        int batch_num = idx / (NUM_ROWS * NUM_COLS);
+        int col_idx = (idx % (NUM_ROWS * NUM_COLS)) % NUM_COLS; // Column index
+        int row_idx = (idx % (NUM_ROWS * NUM_COLS)) / NUM_COLS;
+        float denom = 0.0f;
+        for (int i = 0; i < NUM_COLS; ++i) {
+            denom += expf(A[batch_num * NUM_ROWS * NUM_COLS + row_idx * NUM_COLS + i]);
+        }
+        float a = expf(A[batch_num * NUM_ROWS * NUM_COLS + row_idx * NUM_COLS + col_idx]) / denom;
+        float grad_C_a = grad_C[batch_num * NUM_ROWS * NUM_COLS + row_idx * NUM_COLS + col_idx] * a;
+        grad_A[batch_num * NUM_ROWS * NUM_COLS + row_idx * NUM_COLS + col_idx] = a * (
+            grad_C[batch_num * NUM_COLS + row_idx * NUM_COLS + col_idx] - grad_C_a
+        );
+    }
+}
+
+
+torch::Tensor batch_softmax_forward(
+    const torch::Tensor& A
+//    int AXIS
+//    int AXIS NOTE: May add later, for now assume AXIS = -1
+) {
+    const int BATCH_SIZE = A.size(0);
+    const int NUM_ROWS = A.size(1);
+    const int NUM_COLS = A.size(2);
+    const int threads = 256;
+    const int blocks = (BATCH_SIZE * NUM_ROWS * NUM_COLS + threads - 1) / threads;
+
+    torch::Tensor C = torch::zeros({BATCH_SIZE, NUM_ROWS, NUM_COLS}, A.options());
+
+    batch_softmax_forward_kernel<<<blocks, threads>>>(
+        A.data_ptr<float>(),
+        C.data_ptr<float>(),
+        BATCH_SIZE,
+        NUM_ROWS,
+        NUM_COLS
+//        AXIS
+    );
+
+    return C;
+}
+
+
+torch::Tensor batch_softmax_backward(
+    const torch::Tensor& grad_C,
+    const torch::Tensor& A,
+//    int AXIS NOTE: May add later, for now assume AXIS = -1
+) {
+    const int BATCH_SIZE = A.size(0);
+    const int NUM_ROWS = A.size(1);
+    const int NUM_COLS = A.size(2);
+    const int threads = 256;
+    const int blocks = (BATCH_SIZE * NUM_ROWS * NUM_COLS + threads - 1) / threads;
+
+    torch::Tensor grad_A = torch::zeros({BATCH_SIZE, NUM_ROWS, NUM_COLS}, A.options());
+
+    batch_softmax_backward_kernel<<<blocks, threads>>>(
+        grad_C.data_ptr<float>(),
+        A.data_ptr<float>(),
+        grad_A.data_ptr<float>(),
+        BATCH_SIZE,
+        NUM_ROWS,
+        NUM_COLS
+    );
+
+    return grad_A;
 }
 
 

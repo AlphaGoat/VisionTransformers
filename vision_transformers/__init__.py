@@ -2,6 +2,7 @@ import torch
 from detr import DETRBase
 from deformable_detr import DeformableDETR
 from loss import DETRLoss, DeformableDETRLoss
+from dat import DeformableAttentionTransformerClassifier
 from backbones import build_detr_backbone, build_deformable_detr_backbone
 from typing import Tuple, Callable
 

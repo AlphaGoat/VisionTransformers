@@ -3,9 +3,8 @@ import unittest
 from torch.utils import cpp_extension
 
 
-
 class TestCudaKernel(unittest.TestCase):
-    def text_batch_matrix_mul(self):
+    def test_batch_matrix_mul(self):
         batch_matrix_mul_module = cpp_extension.load(
             name="batch_matrix_mul",
             sources=["./vision_transformers/torch-ext/torch_binding.cpp", "./vision_transformers/cuda/deformable_attn_kernel.cu"],
@@ -19,6 +18,39 @@ class TestCudaKernel(unittest.TestCase):
         test_tensor_b = torch.randn((2, 4, 5), dtype=torch.float32).cuda()
         output_tensor = batch_matrix_mul_module.batch_matrix_mul(test_tensor_a, test_tensor_b)
         expected_output = torch.bmm(test_tensor_a, test_tensor_b)
+        self.assertTrue(torch.allclose(output_tensor, expected_output, atol=1e-6))
+
+    def test_batch_softmax_forward(self):
+        batch_softmax_module = cpp_extension.load(
+            name="batch_softmax",
+            sources=["./vision_transformers/torch-ext/torch_binding.cpp", "./vision_transformers/cuda/deformable_attn_kernel.cu"],
+            extra_cflags=["-O3"],
+            extra_ldflags=["-lcudart", "-lcuda"],
+            extra_include_paths=cpp_extension.include_paths(device_type="cuda"),
+            verbose=True,
+            with_cuda=True
+        )
+        test_tensor = torch.randn((2, 3, 4), dtype=torch.float32).cuda()
+        output_tensor = batch_softmax_module.batch_softmax_forward(test_tensor)
+        expected_output = torch.nn.functional.softmax(test_tensor, dim=-1)
+        self.assertTrue(torch.allclose(output_tensor, expected_output, atol=1e-6))
+
+    def test_batch_softmax_backward(self):
+        batch_softmax_module = cpp_extension.load(
+            name="batch_softmax_backward",
+            sources=["./vision_transformers/torch-ext/torch_binding.cpp", "./vision_transformers/cuda/deformable_attn_kernel.cu"],
+            extra_cflags=["-O3"],
+            extra_ldflags=["-lcudart", "-lcuda"],
+            extra_include_paths=cpp_extension.include_paths(device_type="cuda"),
+            verbose=True,
+            with_cuda=True
+        )
+        test_tensor = torch.randn((2, 3, 4), dtype=torch.float32).cuda()
+        softmax_output = torch.nn.functional.softmax(test_tensor, dim=-1)
+        grad_output = torch.randn((2, 3, 4), dtype=torch.float32).cuda()
+        output_tensor = batch_softmax_module.batch_softmax_backward(grad_output, softmax_output)
+        # Manually compute expected gradient
+        expected_output = softmax_output * (grad_output - (grad_output * softmax_output).sum(dim=-1, keepdim=True))
         self.assertTrue(torch.allclose(output_tensor, expected_output, atol=1e-6))
 
     def test_bilinear_interpolate(self):

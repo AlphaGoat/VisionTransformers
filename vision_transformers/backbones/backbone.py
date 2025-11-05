@@ -4,12 +4,12 @@ Module for importing different backbones for Deformable DETR.
 Author: Peter Thomas
 Date: 07 October 2025
 """
-from torchvision.models import resnet50, resnet101
+from torchvision.models import resnet50, resnet101, vgg16
 from torchvision.models.feature_extraction import create_feature_extractor
 from vision_transformers.backbones.resnet_3d_conv import Resnet50With3dConv
 
 
-def fetch_resnet50(pretrained=True):
+def fetch_resnet50_with_def_detr_hooks(pretrained=True):
     model = resnet50(pretrained=pretrained)
     return_nodes = {
         'layer4.2.relu_2': "feature3",
@@ -20,10 +20,9 @@ def fetch_resnet50(pretrained=True):
     return feature_extractor
 
 
-
 def build_deformable_detr_backbone(name='resnet50', pretrained=True, train_backbone=False):
     if name == 'resnet50':
-        backbone = fetch_resnet50(pretrained=pretrained)
+        backbone = fetch_resnet50_with_def_detr_hooks(pretrained=pretrained)
     elif name == 'resnet101':
 #        backbone = resnet101(pretrained=pretrained)
         raise NotImplementedError("ResNet101 backbone is not implemented yet.")
@@ -36,13 +35,15 @@ def build_deformable_detr_backbone(name='resnet50', pretrained=True, train_backb
     return backbone
 
 
-def build_detr_backbone(name='resnet50', pretrained=True, train_backbone=False):
+def build_vision_transformer_backbone(name='resnet50', pretrained=True, train_backbone=False):
     if name == 'resnet50':
         backbone = resnet50(pretrained=pretrained)
     elif name == 'resnet101':
         backbone = resnet101(pretrained=pretrained)
     elif name == 'resnet50_with_3dconv':
         backbone = Resnet50With3dConv(classification_head=False)
+    elif name == "vgg16":
+        backbone = vgg16(pretrained=pretrained).features
     else:
         raise ValueError(f"Unsupported backbone: {name}")
 

@@ -1,1 +1,1 @@
-from backbone import build_detr_backbone, build_deformable_detr_backbone
+from backbone import build_vision_transformer_backbone, build_deformable_detr_backbone
