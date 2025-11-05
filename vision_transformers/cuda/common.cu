@@ -2,6 +2,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <torch/extension.h>
+#include "common.cuh"
 
 
 __global__ void matrix_add_forward(
@@ -129,11 +130,14 @@ torch::Tensor batch_bias_add_forward(
         M
     );
 
+    cudaDeviceSynchronize();
+
     return C;
 }
 
 
-torch::TensorPair batch_bias_add_backward(
+//torch::TensorPair batch_bias_add_backward(
+tensor_pair batch_bias_add_backward(
     const torch::Tensor& grad_C,
     int BATCH_SIZE,
     int N,
@@ -153,6 +157,8 @@ torch::TensorPair batch_bias_add_backward(
         N,
         M
     );
+
+    cudaDeviceSynchronize();
 
     return {grad_A, grad_B};
 }
@@ -229,6 +235,8 @@ torch::Tensor batch_softmax_forward(
 //        AXIS
     );
 
+    cudaDeviceSynchronize();
+
     return C;
 }
 
@@ -254,6 +262,8 @@ torch::Tensor batch_softmax_backward(
         NUM_ROWS,
         NUM_COLS
     );
+
+    cudaDeviceSynchronize();
 
     return grad_A;
 }
@@ -334,7 +344,8 @@ torch::Tensor batch_matrix_mul_forward(
 }
 
 
-torch::TensorPair batch_matrix_mul_backward(
+//torch::TensorPair batch_matrix_mul_backward(
+tensor_pair batch_matrix_mul_backward(
     const torch::Tensor& grad_C,
     const torch::Tensor& A,
     const torch::Tensor& B
@@ -472,11 +483,14 @@ torch::Tensor add_offsets_forward(
         K
     );
 
+    cudaDeviceSynchronize();
+
     return C;
 }
 
 
-torch::TensorPair add_offsets_backward(
+//torch::TensorPair add_offsets_backward(
+tensor_pair add_offsets_backward(
     const torch::Tensor& grad_C,
     int N,
     int K
@@ -494,6 +508,8 @@ torch::TensorPair add_offsets_backward(
         N,
         M
     );
+
+    cudaDeviceSynchronize();
 
     return {grad_A, grad_B};
 }

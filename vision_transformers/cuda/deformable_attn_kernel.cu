@@ -107,7 +107,7 @@ torch::Tensor bilinear_interpolate_forward(
 
     torch::Tensor output = torch::zeros({x.numel()}, input.options());
 
-    bilinear_interpolate_kernel<<<blocks, threads>>>(
+    bilinear_interpolate_forward_kernel<<<blocks, threads>>>(
         cont_input.data_ptr<float>(),
         output.data_ptr<float>(),
         height,
@@ -133,12 +133,15 @@ torch::Tensor bilinear_interpolate_backward(
     const int threads = 256;
     const int blocks = (N + threads - 1) / threads;
 
+    torch::Tensor grad_input = torch::zeros({height, width}, grad_output.options());
+
     bilinear_interpolate_backward_kernel<<<blocks, threads>>>(
         grad_output.data_ptr<float>(),
-        y.data_ptr<float>(),
-        x.data_ptr<float>(),
+        grad_input.data_ptr<float>(),
         height,
         width,
+        y.data_ptr<float>(),
+        x.data_ptr<float>(),
         N
     );
 
@@ -167,14 +170,14 @@ torch::Tensor multiscale_deformable_attn_forward(
     torch::Tensor offsets = batch_bias_add_forward(batch_matrix_mul_forward(W_offsets, query), B_offsets);
 
     // Get sampling points
-    torch::Tensor sampling_points = add_offsets_forward(&reference_points, &offsets);
+    torch::Tensor sampling_points = add_offsets_forward(&reference_points, offsets);
 
     // Generate attention weights
     torch::Tensor attention_weights = batch_matrix_mul_forward(query, key.transpose(1, 2));
 
     // sampling_points shape: (batch_size, num_sampling_points, 2)
     // Get sampling points from input feature map
-    torch::Tensor sampled_features = bilinear_interpolate_forward(feature_map, sampling_points);
+    torch::Tensor sampled_features = bilinear_interpolate_forward(feature_map, sampling_points.select(-1, 0), sampling_points.select(-1, 1));
 
     // Shape: (batch_size, num_sampling_points, C)
     // Compute attention output
@@ -189,8 +192,7 @@ torch::Tensor multiscale_deformable_attn_forward(
 //        output.data_ptr<float>(),
 //        batch_size
 //    );
-
-    cudaDeviceSynchronize();
+    return output;
 }
 
 
@@ -236,9 +238,10 @@ torch::Tensor multi_head_attention_backward(
 ) {
     /* Backward pass for multi-head attention */
     // Placeholder for backward implementation
-    torch::Tensor grad_queries = torch::zeros_like(queries);
-    torch::Tensor grad_keys = torch::zeros_like(keys);
-    torch::Tensor grad_values = torch::zeros_like(values);
+    torch::Tensor grad_queries;
+    torch::Tensor grad_keys;
+    torch::Tensor grad_values;
+    torch::Tensor grad_scores;
 
     // Actual gradient computations would go here
     grad_values = attention_weights.transpose(1, 2); // Placeholder

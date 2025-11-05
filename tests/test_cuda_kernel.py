@@ -22,7 +22,7 @@ class TestCudaKernel(unittest.TestCase):
 
     def test_batch_softmax_forward(self):
         batch_softmax_module = cpp_extension.load(
-            name="batch_softmax",
+            name="batch_softmax_forward",
             sources=["./vision_transformers/torch-ext/torch_binding.cpp", "./vision_transformers/cuda/deformable_attn_kernel.cu"],
             extra_cflags=["-O3"],
             extra_ldflags=["-lcudart", "-lcuda"],
