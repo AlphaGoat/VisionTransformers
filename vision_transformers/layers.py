@@ -13,9 +13,9 @@ class AttentionLayer(torch.nn.Module):
         super().__init__()
         self.d_model = d_model
         self.nhead = nhead
-        self.W_q = torch.nn.Linear(d_model, d_model)
-        self.W_k = torch.nn.Linear(d_model, d_model)
-        self.W_v = torch.nn.Linear(d_model, d_model)
+        self.W_q = torch.nn.Linear(d_model, d_model, bias=False)
+        self.W_k = torch.nn.Linear(d_model, d_model, bias=False)
+        self.W_v = torch.nn.Linear(d_model, d_model, bias=False)
 
     def forward(self, query, key, value):
         Q = self.W_q(query)
@@ -38,7 +38,14 @@ class MultiHeadAttention(torch.nn.Module):
         self.linear = torch.nn.Linear(d_model, d_model)
 
     def forward(self, query, key, value):
-        attn_outputs = [attn_layer(query, key, value) for attn_layer in self.attention_layers]
+        # Divide queries, keys, values for each head
+        query = query.view(query.size(0), query.size(1), self.nhead, -1).transpose(1, 2)
+        key = key.view(key.size(0), key.size(1), self.nhead, -1).transpose(1, 2)
+        value = value.view(value.size(0), value.size(1), self.nhead, -1).transpose(1, 2)
+
+        attn_outputs = [attn_layer(q, k, v) for attn_layer, q, k, v in 
+                        zip(self.attention_layers, torch.split(query, dim=1), 
+                        torch.split(key, dim=1), torch.split(value, dim=1))]
         concat_attn = torch.cat(attn_outputs, dim=-1)
         output = self.linear(concat_attn)
         return output

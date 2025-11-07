@@ -49,3 +49,19 @@ def get_y_positions(num_pixels_feature_map, start_idx=0):
     y_positions = torch.arange(start_idx, start_idx + num_pixels_, dtype=torch.float32)
     y_positions = torch.repeat_interleave(y_positions, num_pixels_, dim=0)
     return y_positions
+
+
+def get_num_output_channels(backbone, input_shape=(3, 256, 256)):
+    """ Utility function to get the number of output channels from the backbone model. """
+    dummy_input = torch.randn(1, *input_shape)
+    with torch.no_grad():
+        features = backbone(dummy_input)
+    return features.size(1)  # Assuming features shape is (1, C, H, W)
+
+
+def get_output_shape(backbone, input_shape=(3, 256, 256)):
+    """ Utility function to get the number of output channels from the backbone model. """
+    dummy_input = torch.randn(1, *input_shape)
+    with torch.no_grad():
+        features = backbone(dummy_input)
+    return features.shape  # Assuming features shape is (1, C, H, W)

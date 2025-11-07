@@ -8,7 +8,9 @@ import torch
 import deformable_attn_cuda
 from torch.autograd import Function
 from collections import OrderedDict
-from layers import SinusoidalPositionalEncoding
+
+from .layers import SinusoidalPositionalEncoding
+from .utils import get_num_output_channels
 
 
 class DeformableAttention(Function):
@@ -152,11 +154,3 @@ class DeformableAttentionTransformerClassifier(torch.nn.Module):
         pooled_output = attn_output.mean(dim=0)
         logits = self.classifier(pooled_output)
         return logits
-
-
-def get_num_output_channels(backbone, input_shape=(3, 256, 256)):
-    """ Utility function to get the number of output channels from the backbone model. """
-    dummy_input = torch.randn(1, *input_shape)
-    with torch.no_grad():
-        features = backbone(dummy_input)
-    return features.size(1)  # Assuming features shape is (1, C, H, W)
