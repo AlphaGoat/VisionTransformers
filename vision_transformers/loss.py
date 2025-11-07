@@ -1,30 +1,34 @@
 """
-Deformable-DETR loss function.
+Module for loss functions.
 
 Author: Peter Thomas
 Date: 07 October 2025
 """
 import torch
 from torchvision import ops
+from torch.nn import functional as F
 from scipy.optimize import linear_sum_assignment
 
 
-class DETRLoss():
+class DETRLoss(torch.nn.Module):
     def __init__(self, num_classes, weight_dict):
         self.weight_dict = weight_dict
         pass
 
+    @torch.no_grad()
     def hungarian_matcher(self, preds, targets):
-        pred_bboxes = preds["pred_bboxes"]
-        target_bboxes = targets["bboxes"]
+        batch_size, num_queries = preds.size(0), preds.size(1)
 
-        pred_classes = preds["class_logits"]
-        target_classes = targets["labels"]
+        # Flatten batch and query dimension of predictions
+        pred_bboxes = preds["pred_bboxes"].flatten(0, 1) # [batch_size * num_queries, 4]
+        pred_probs = preds["class_logits"].flatten(0, 1) # [batch_size * num_queries, 4]
 
-        p_probs = pred_classes.softmax(dim=-1)
+        # Flatten target / num boxes dimensions for target bboxes
+        target_bboxes = torch.cat([t["bboxes"] for t in targets])
+        target_classes = torch.cat([t["labels"] for t in targets])
 
         # Class cost is negative of pred probability given for target class
-        C_classes = -1. * p_probs[..., target_classes]
+        C_classes = -1. * pred_probs[:, target_classes]
 
         # L1 norm for bounding box cost
         C_boxes = torch.cdist(pred_bboxes, target_bboxes, p=1)
@@ -37,13 +41,67 @@ class DETRLoss():
         C_total = self.weight_dict["cls_weight"] * C_classes + \
             self.weight_dict["box_weight"] * C_boxes + \
             self.weight_dict["giou_weight"] * C_giou
-
+        C_total = C_total.view(batch_size, num_queries, -1)
         C_total = C_total.cpu().detach().numpy()
 
         # Find the optimum pairs that produce the minimum summation
-        pred_idxs, target_idxs = linear_sum_assignment(C_total)
+        indices = [linear_sum_assignment(C_total[i]) for i in range(batch_size)]
 
-        return C_total
+        return [(torch.IntTensor(i), torch.IntTensor(j)) for i, j in indices]
+
+    def loss_bboxes(self, p_bboxes, t_bboxes, n_boxes):
+        # Bbox loss is just L1 loss
+        loss_bbox = F.l1_loss(p_bboxes, t_bboxes, reduction="none")
+
+        # Normalize loss by number of boxes in each batch
+        loss_bbox /= n_boxes
+        return loss_bbox
+
+    def loss_giou(self, p_bboxes, t_bboxes, n_boxes):
+        loss_giou = 1. - torch.diag(
+            ops.generalized_box_iou(
+                ops.box_convert(p_bboxes, in_fmt='cxcywh', out_fmt='xyxy'),
+                ops.box_convert(t_bboxes, in_fmt='cxcywh', out_fmt='xyxy'),
+            )
+        )
+        loss_giou /= n_boxes
+        return loss_giou
+
+    def loss_class(self, p_probs, t_classes, n_boxes, pad_indices):
+        loss_class = torch.nn.CrossEntropyLoss()(p_probs, t_classes, reduction="none")
+        loss_class.index_fill(1, pad_indices, 0.0)
+        loss_class /= loss_class
+        return loss_class
+
+    def __call__(self, preds, targets):
+
+        # Hungarian matching to find optimum pairs
+        pred_idxs, target_idxs = self.hungarian_matcher(preds, targets)
+        pred_idxs, target_idxs = torch.IntTensor(pred_idxs), torch.IntTensor(target_idxs)
+
+        # Order target indices (makes tracking a little easier...)
+        pred_idxs = pred_idxs[target_idxs.argsort()]
+
+        # Unpack predictions and targets
+        pred_bboxes = preds["pred_bboxes"]
+        target_bboxes = targets["boxes"]
+
+        pred_probs = preds["class_logits"]
+        target_classes = targets["labels"]
+
+        # Zero out predictions corresponding to a pad target box
+        pad_indices = targets["pad_idxs"]
+        pred_bboxes.index_fill_(1, pad_indices, 0.0)
+        pred_probs.index_fill(1, pad_indices, 0.0) # NOTE: will need to mask out targets in class loss to make this work...
+
+        # Get the number of truth boxes in each batch
+        batch_size = preds.size(0)
+        num_boxes = torch.tensor([t.size(0) for t in torch.split(target_bboxes, batch_size, dim=0)])
+
+        # Calculate losses
+        l_bbox = self.loss_bboxes(pred_bboxes, target_bboxes, num_boxes)
+        l_giou = self.loss_giou(pred_bboxes, target_bboxes, num_boxes)
+        l_class = self.loss_class(pred_probs, target_classes, num_boxes, pad_indices)
 
 
 #class DETRLoss(torch.nn.Module):

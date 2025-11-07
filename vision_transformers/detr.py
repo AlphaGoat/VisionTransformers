@@ -143,8 +143,14 @@ class DETRBase(torch.nn.Module):
                                    positional_encoding=positional_encoding)
 
         # Detection and classification heads
-        self.classification_head = torch.nn.Linear(d_model, num_classes)
-        self.detection_head = torch.nn.Linear(d_model, num_classes)
+        self.classification_head = torch.nn.Sequential(
+            torch.nn.Linear(d_model, num_classes),
+            torch.nn.Softmax(),
+        )
+        self.detection_head = torch.nn.Sequential(
+            torch.nn.Linear(d_model, num_classes),
+            torch.nn.Sigmoid(),
+        )
 
     def forward(self, x):
         """ 
@@ -169,7 +175,6 @@ class DETRBase(torch.nn.Module):
 
         # Pass object queries and encoder outputs to decoder
         decoder_out = self.decoder(object_queries, encoder_out)
-
 
         # Generate class logits and bbox predictions 
         outs = {}
