@@ -65,3 +65,14 @@ def get_output_shape(backbone, input_shape=(3, 256, 256)):
     with torch.no_grad():
         features = backbone(dummy_input)["feature_map"]
     return features.shape  # Assuming features shape is (1, C, H, W)
+
+def init_weights(module):
+    """ Initialize weights of linear and convolutional layers using Xavier uniform initialization. """
+    def _init_weights(module):
+        if isinstance(module, (torch.nn.Linear, torch.nn.Conv2d)):
+            torch.nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+
+    for m in module.children():
+        m.apply(_init_weights)
