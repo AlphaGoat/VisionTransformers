@@ -1,7 +1,7 @@
 import torch
 from collections import OrderedDict
 
-from .utils import get_num_output_channels
+from .utils import get_output_shape
 from .layers import MultiHeadAttention, SinusoidalPositionalEncoding
 
 
@@ -34,8 +34,8 @@ class DETREncoder(torch.nn.Module):
         for i in range(self.num_layers):
             # Self attention on input image features
             x = self.self_attn_layers[i]["self_attn"](
-                features + self.pos_encoding,
-                features + self.pos_encoding,
+                features + self.pos_encoding.pe,
+                features + self.pos_encoding.pe,
                 features
             )
             x = self.self_attn_layers[i]["self_attn_norm"](x + features)
@@ -48,7 +48,7 @@ class DETREncoder(torch.nn.Module):
 
 
 class DETRDecoder(torch.nn.Module):
-    def __init__(self, d_model=256, num_tokens=225, 
+    def __init__(self, d_model=256, num_tokens=225, num_queries=100,
                  nhead=8, num_layers=6, positional_encoding="sinusoidal"):
         super().__init__()
         self.d_model = d_model
@@ -56,9 +56,12 @@ class DETRDecoder(torch.nn.Module):
         self.num_layers = num_layers
         
         if positional_encoding == "sinusoidal":
-            self.pos_encoding = SinusoidalPositionalEncoding(num_tokens, d_model)
+            self.self_attn_pos_encoding = SinusoidalPositionalEncoding(num_queries, d_model)
+            self.cross_attn_pos_encoding = SinusoidalPositionalEncoding(num_tokens, d_model)
         else:
             raise NotImplementedError(f"{positional_encoding} positional encoding not implemented.")
+
+
 
         self.self_attn_layers = torch.nn.ModuleList()
         self.cross_attn_layers = torch.nn.ModuleList()
@@ -83,16 +86,16 @@ class DETRDecoder(torch.nn.Module):
         for i in range(self.num_layers):
             # Self attention on object queries
             x = self.self_attn_layers[i]["self_attn"](
-                object_queries + self.pos_encoding,
-                object_queries + self.pos_encoding,
-                object_queries 
+                object_queries + self.self_attn_pos_encoding.pe,
+                object_queries + self.self_attn_pos_encoding.pe,
+                object_queries
             )
             x = self.self_attn_layers[i]["self_attn_norm"](x + object_queries)
 
             # Cross attention on object queries as well as encoder outputs
             cross_attn_out = self.cross_attn_layers[i]["cross_attn"](
-                object_queries + x + self.pos_encoding,
-                encoder_out + self.pos_encoding,
+                object_queries + x + self.self_attn_pos_encoding.pe,
+                encoder_out + self.cross_attn_pos_encoding.pe,
                 encoder_out
             )
             x = self.cross_attn_layers[i]["cross_attn_norm"](cross_attn_out + x)
@@ -106,8 +109,8 @@ class DETRDecoder(torch.nn.Module):
 
 
 class DETRBase(torch.nn.Module):
-    def __init__(self, backbone, num_classes, num_queries, d_model=256,
-                 num_heads=8, positional_encoding="sinusoidal"): 
+    def __init__(self, backbone, num_classes, num_queries, image_shape=(3, 256, 256), 
+                 d_model=256, num_heads=8, positional_encoding="sinusoidal"): 
 
         super().__init__()
         self.backbone = backbone
@@ -118,13 +121,13 @@ class DETRBase(torch.nn.Module):
 
         # Get the shape of the feature map from the backbone, which will
         # determine the number of tokens fed into the encoder
-        feature_map_shape = get_num_output_channels()
-        self.num_tokens = feature_map_shape(dim=1) * feature_map_shape(dim=2)
+        feature_map_shape = get_output_shape(backbone, input_shape=image_shape)
+        self.num_tokens = feature_map_shape[2] * feature_map_shape[3]
 
         # Feature embedding network
         self.conv1x1 = torch.nn.Sequential(
             OrderedDict({
-                "conv1x1": torch.nn.Conv2d(feature_map_shape(dim=0), self.d_model, kernel_size=1, stride=1),
+                "conv1x1": torch.nn.Conv2d(feature_map_shape[1], self.d_model, kernel_size=1, stride=1),
                 "batch_norm": torch.nn.BatchNorm2d(self.d_model),
                 "relu": torch.nn.ReLU()
             })
@@ -139,7 +142,7 @@ class DETRBase(torch.nn.Module):
         # Initialize DETR encoder and decoder
         self.encoder = DETREncoder(d_model, self.num_tokens, num_heads, num_layers=6,
                                    positional_encoding=positional_encoding)
-        self.decoder = DETRDecoder(d_model, num_queries, num_heads, num_layers=6,
+        self.decoder = DETRDecoder(d_model, self.num_tokens, num_queries, num_heads, num_layers=6,
                                    positional_encoding=positional_encoding)
 
         # Detection and classification heads
@@ -161,7 +164,7 @@ class DETRBase(torch.nn.Module):
         Returns:
             dict: Dictionary containing class logits and bounding box predictions.
         """
-        features = self.backbone(x)
+        features = self.backbone(x)["feature_map"]
         features = self.conv1x1(features)
         
         # Flatten spatial features of output
@@ -182,8 +185,8 @@ class DETRBase(torch.nn.Module):
             class_logits = self.classification_head(dout)
             bbox_preds = self.detection_head(dout)
             outs[name] = {
-                "class_logits": class_logits,
-                "bbox_preds": bbox_preds
+                "pred_logits": class_logits,
+                "pred_boxes": bbox_preds
             }
 
         return outs

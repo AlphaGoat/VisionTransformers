@@ -5,7 +5,7 @@ Author: Peter Thomas
 Date: 07 October 2025
 """
 import torch
-import deformable_attn_cuda
+#import deformable_attn_cuda
 from torch.autograd import Function
 from collections import OrderedDict
 

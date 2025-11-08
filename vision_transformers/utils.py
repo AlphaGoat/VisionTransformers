@@ -63,5 +63,5 @@ def get_output_shape(backbone, input_shape=(3, 256, 256)):
     """ Utility function to get the number of output channels from the backbone model. """
     dummy_input = torch.randn(1, *input_shape)
     with torch.no_grad():
-        features = backbone(dummy_input)
+        features = backbone(dummy_input)["feature_map"]
     return features.shape  # Assuming features shape is (1, C, H, W)

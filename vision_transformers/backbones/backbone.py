@@ -37,7 +37,11 @@ def build_deformable_detr_backbone(name='resnet50', pretrained=True, train_backb
 
 def build_vision_transformer_backbone(name='resnet50', pretrained=True, train_backbone=False):
     if name == 'resnet50':
-        backbone = resnet50(pretrained=pretrained)
+        model = resnet50(pretrained=pretrained)
+        return_nodes = {
+            "layer4": "feature_map",
+        }
+        backbone = create_feature_extractor(model, return_nodes=return_nodes)
     elif name == 'resnet101':
         backbone = resnet101(pretrained=pretrained)
     elif name == 'resnet50_with_3dconv':

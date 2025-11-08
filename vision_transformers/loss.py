@@ -11,20 +11,24 @@ from scipy.optimize import linear_sum_assignment
 
 
 class DETRLoss(torch.nn.Module):
-    def __init__(self, num_classes, weight_dict):
-        self.weight_dict = weight_dict
-        pass
+    def __init__(self, num_classes, class_weight=1.0, giou_weight=1.0, bbox_weight=1.0):
+        self.num_classes = num_classes
+        self.class_weight = class_weight
+        self.giou_weight = giou_weight
+        self.bbox_weight = bbox_weight
 
     @torch.no_grad()
     def hungarian_matcher(self, preds, targets):
-        batch_size, num_queries = preds.size(0), preds.size(1)
+        pred_bboxes = preds["pred_boxes"]
+        pred_probs = preds["pred_logits"]
+        batch_size, num_queries = pred_bboxes.size(0), pred_bboxes.size(1)
 
         # Flatten batch and query dimension of predictions
-        pred_bboxes = preds["pred_bboxes"].flatten(0, 1) # [batch_size * num_queries, 4]
-        pred_probs = preds["class_logits"].flatten(0, 1) # [batch_size * num_queries, 4]
+        pred_bboxes = pred_bboxes.flatten(0, 1) # [batch_size * num_queries, 4]
+        pred_probs = pred_probs.flatten(0, 1) # [batch_size * num_queries, 4]
 
         # Flatten target / num boxes dimensions for target bboxes
-        target_bboxes = torch.cat([t["bboxes"] for t in targets])
+        target_bboxes = torch.cat([t["boxes"] for t in targets])
         target_classes = torch.cat([t["labels"] for t in targets])
 
         # Class cost is negative of pred probability given for target class
@@ -38,9 +42,9 @@ class DETRLoss(torch.nn.Module):
             ops.box_convert(target_bboxes, in_fmt='cxcywh', out_fmt='xyxy'),
         )
 
-        C_total = self.weight_dict["cls_weight"] * C_classes + \
-            self.weight_dict["box_weight"] * C_boxes + \
-            self.weight_dict["giou_weight"] * C_giou
+        C_total = self.class_weight * C_classes + \
+            self.bbox_weight * C_boxes + \
+            self.giou_weight * C_giou
         C_total = C_total.view(batch_size, num_queries, -1)
         C_total = C_total.cpu().detach().numpy()
 
@@ -67,10 +71,10 @@ class DETRLoss(torch.nn.Module):
         loss_giou /= n_boxes
         return loss_giou
 
-    def loss_class(self, p_probs, t_classes, n_boxes, pad_indices):
+    def loss_class(self, p_probs, t_classes, n_boxes, pad_mask):
         loss_class = torch.nn.CrossEntropyLoss()(p_probs, t_classes, reduction="none")
-        loss_class.index_fill(1, pad_indices, 0.0)
-        loss_class /= loss_class
+        loss_class *= pad_mask
+        loss_class /= n_boxes
         return loss_class
 
     def __call__(self, preds, targets):
@@ -83,16 +87,16 @@ class DETRLoss(torch.nn.Module):
         pred_idxs = pred_idxs[target_idxs.argsort()]
 
         # Unpack predictions and targets
-        pred_bboxes = preds["pred_bboxes"]
+        pred_bboxes = preds["pred_boxes"]
         target_bboxes = targets["boxes"]
 
-        pred_probs = preds["class_logits"]
+        pred_probs = preds["pred_logits"]
         target_classes = targets["labels"]
 
         # Zero out predictions corresponding to a pad target box
-        pad_indices = targets["pad_idxs"]
-        pred_bboxes.index_fill_(1, pad_indices, 0.0)
-        pred_probs.index_fill(1, pad_indices, 0.0) # NOTE: will need to mask out targets in class loss to make this work...
+        pad_mask = targets["pad_mask"]
+        pred_bboxes *= pad_mask
+        pred_probs *= pad_mask
 
         # Get the number of truth boxes in each batch
         batch_size = preds.size(0)
@@ -101,7 +105,12 @@ class DETRLoss(torch.nn.Module):
         # Calculate losses
         l_bbox = self.loss_bboxes(pred_bboxes, target_bboxes, num_boxes)
         l_giou = self.loss_giou(pred_bboxes, target_bboxes, num_boxes)
-        l_class = self.loss_class(pred_probs, target_classes, num_boxes, pad_indices)
+        l_class = self.loss_class(pred_probs, target_classes, num_boxes, pad_mask)
+
+        loss = self.bbox_weight * l_bbox + self.giou_weight * l_giou + \
+            self.class_weight * l_class
+        loss /= batch_size
+        return loss
 
 
 #class DETRLoss(torch.nn.Module):

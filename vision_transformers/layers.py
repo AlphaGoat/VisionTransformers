@@ -43,9 +43,9 @@ class MultiHeadAttention(torch.nn.Module):
         key = key.view(key.size(0), key.size(1), self.nhead, -1).transpose(1, 2)
         value = value.view(value.size(0), value.size(1), self.nhead, -1).transpose(1, 2)
 
-        attn_outputs = [attn_layer(q, k, v) for attn_layer, q, k, v in 
-                        zip(self.attention_layers, torch.split(query, dim=1), 
-                        torch.split(key, dim=1), torch.split(value, dim=1))]
+        attn_outputs = [attn_layer(q.squeeze(1), k.squeeze(1), v.squeeze(1)) for attn_layer, q, k, v in
+                        zip(self.attention_layers, torch.split(query, 1, dim=1),
+                            torch.split(key, 1, dim=1), torch.split(value, 1, dim=1))]
         concat_attn = torch.cat(attn_outputs, dim=-1)
         output = self.linear(concat_attn)
         return output
@@ -62,8 +62,8 @@ class SinusoidalPositionalEncoding(torch.nn.Module):
         self.y_positions = get_y_positions(n_pixels)
 
         # Generate positional encodings
-        x_pos_embedding = self.generate_sinusoidal_1d(self.x_positions.unsqueeze(1))
-        y_pos_embedding = self.generate_sinusoidal_1d(self.y_positions.unsqueeze(1))
+        x_pos_embedding = self.generate_sinusoidal_1d(self.x_positions.reshape(-1, 1))
+        y_pos_embedding = self.generate_sinusoidal_1d(self.y_positions.reshape(-1, 1))
 
         # Combine x-axis and y-axis positional encodings
         pe = torch.cat((x_pos_embedding, y_pos_embedding), dim=-1)
@@ -78,7 +78,7 @@ class SinusoidalPositionalEncoding(torch.nn.Module):
         denominator = torch.pow(10000, torch.arange(0, self.embed_dim, 2).float() / self.embed_dim)
 
         # Create empty tensor for positional encodings
-        pos_encodings = torch.zeros((sequence.size(0), self.embed_dim))
+        pos_encodings = torch.zeros((1, sequence.size(0), self.embed_dim))
         denominator = sequence / denominator
         pos_encodings[:, :, 0::2] = torch.sin(denominator)
         pos_encodings[:, :, 1::2] = torch.cos(denominator)
