@@ -65,8 +65,7 @@ class DETRLoss(torch.nn.Module):
         loss_bbox = F.l1_loss(p_bboxes, t_bboxes, reduction="none")
 
         # Normalize loss by number of boxes in each batch
-        import pdb; pdb.set_trace()
-        loss_bbox = loss_bbox.sum(dim=2)
+        loss_bbox = loss_bbox.sum(dim=[1, 2])
         loss_bbox /= n_boxes
         return loss_bbox
 
@@ -85,9 +84,11 @@ class DETRLoss(torch.nn.Module):
         return loss_giou
 
     def loss_class(self, p_probs, t_classes, n_boxes):
-        loss_class = torch.nn.CrossEntropyLoss()(p_probs, t_classes, reduction="none")
-        import pdb; pdb.set_trace()
+        p_probs = p_probs.reshape(-1, self.num_classes)
+        t_classes = t_classes.reshape(-1)
+        loss_class = torch.nn.CrossEntropyLoss(reduction="none")(p_probs, t_classes)
         loss_class = loss_class.reshape(self.batch_size, -1)
+        loss_class = loss_class.sum(dim=1)
         loss_class /= n_boxes
         return loss_class
 

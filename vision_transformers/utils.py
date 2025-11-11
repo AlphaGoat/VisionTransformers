@@ -75,4 +75,21 @@ def init_weights(module):
                 torch.nn.init.zeros_(module.bias)
 
     for m in module.children():
-        m.apply(_init_weights)
+        _init_weights(m)
+
+
+def get_trainable_parameters(model):
+    """ Utility function to get the number of trainable parameters in a model. """
+    return [{"params": [p for n, p in model.named_parameters() if "backbone" not in n and p.requires_grad]},
+            {"params": [p for n, p in model.named_parameters() if "backbone" in n and p.requires_grad], "lr": 1e-5}]
+
+
+def initialize_parameters(module: torch.nn.Module, reset_backbone: bool = False):
+    """ Initialize the parameters of the model using Xavier uniform initialization. """
+    for n, m in module.named_modules():
+        if not reset_backbone and "backbone" in n:
+            continue
+        if isinstance(m, (torch.nn.Linear, torch.nn.Conv2d)):
+            torch.nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                torch.nn.init.zeros_(m.bias)

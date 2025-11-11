@@ -1,7 +1,7 @@
 import torch
 from collections import OrderedDict
 
-from .utils import get_output_shape
+from .utils import get_output_shape, initialize_parameters
 from .layers import MultiHeadAttention, SinusoidalPositionalEncoding
 
 
@@ -60,8 +60,6 @@ class DETRDecoder(torch.nn.Module):
             self.cross_attn_pos_encoding = SinusoidalPositionalEncoding(num_tokens, d_model)
         else:
             raise NotImplementedError(f"{positional_encoding} positional encoding not implemented.")
-
-
 
         self.self_attn_layers = torch.nn.ModuleList()
         self.cross_attn_layers = torch.nn.ModuleList()
@@ -155,6 +153,8 @@ class DETRBase(torch.nn.Module):
             torch.nn.Sigmoid(),
         )
 
+        initialize_parameters(self)
+
     def forward(self, x):
         """ 
         Forward pass through the DETR model. 
@@ -184,6 +184,8 @@ class DETRBase(torch.nn.Module):
         for name, dout in decoder_out.items():
             class_logits = self.classification_head(dout)
             bbox_preds = self.detection_head(dout)
+            # Output bboxes in format (cx, cy, w, h) normalized between [0, 1] (batch_size, num_queries, 4)
+            # Output class logits as probabilities over all classes (batch_size, num_queries, num_classes)
             outs[name] = {
                 "pred_logits": class_logits,
                 "pred_boxes": bbox_preds

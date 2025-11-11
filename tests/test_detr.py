@@ -4,12 +4,15 @@ Run unittests for DETR model.
 Author: Peter Thomas
 Date: 28 October 2025
 """
+import math
 import torch
 import json
 import unittest
 import numpy as np
 from PIL import Image
+
 from vision_transformers import build_model
+from vision_transformers.utils import get_trainable_parameters
 
 
 class TestDETRModel(unittest.TestCase):
@@ -48,61 +51,81 @@ class TestDETRModel(unittest.TestCase):
             }
         ]
 
-        loss_dict = criterion(outputs, dummy_targets)
-        self.assertIn('loss_labels', loss_dict)
-        self.assertIn('loss_boxes', loss_dict)
+        loss_tensor = criterion(outputs, dummy_targets)
+        loss = (loss_tensor.sum() / 2).cpu().item()  # Average over batch size
+        self.assertGreater(loss, 0.0)
+        self.assertTrue(math.isfinite(loss))
+        self.assertTrue(math.isnan(loss) == False)
 
-#    def test_overfit(self):
-#        """
-#        Test if the DETR model can overfit on a single image dataset.
-#        """
-#        test_image_path = "tests/overfit_data/cat_collects_rocks/cat_collects_rocks.jpg"
-#        test_annotation_path = "tests/overfit_data/cat_collects_rocks/cat_collects_rocks.json"
-#        with open(test_annotation_path, 'r') as f:
-#            data = json.load(f)["data"]
-#            labels = []
-#            boxes = []
-#            dummy_targets = []
-#            for obj in data["objects"]:
-#                labels.append(obj["class_id"])
-#                boxes.append(obj["bbox"])
-#            dummy_targets.append({"labels": labels, "boxes": boxes})
-#
-#        image = Image.open(test_image_path).convert("RGB")
-#        image = np.asarray(image).permute(2, 0, 1)  # Convert to (C, H, W)
-#        image = image / 255.0  # Normalize to [0, 1]
-#
-#        model, criterion = build_model(name='detr', backbone='resnet50')
-#        model.to(torch.device('cpu'))
-#        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-#        for _ in range(20):  # Train for 20 epochs
-#            model.train()
-#            outputs = model(image.unsqueeze(0))
-#
-#            loss_dict = criterion(outputs, dummy_targets)
-#            losses = sum(loss for loss in loss_dict.values())
-#
-#            optimizer.zero_grad()
-#            losses.backward()
-#            optimizer.step()
-#
-#        # Check that bounding boxes are close
-#        with torch.no_grad():
-#            model.eval()
-#            outputs = model(image.unsqueeze(0)).detach().cpu()
-#            pred_boxes = outputs['pred_boxes']
-#            pred_classes = outputs['pred_logits'].argmax(-1)
-#            for box, label in zip(dummy_targets[0]['boxes'], dummy_targets[0]['labels']):
-#                iou = self.compute_iou(pred_boxes, box)
-#
-#                # Get index of box with highest iou
-#                max_iou_idx = np.argmax(iou)
-#                pred_box = pred_boxes[0, max_iou_idx]
-#                pred_label = pred_classes[0, max_iou_idx]
-#                max_iou = iou[max_iou_idx]
-#
-#                self.assertGreater(max_iou, 0.75)
-#                self.assertEqual(pred_label, label)
+    def test_overfit(self):
+        """
+        Test if the DETR model can overfit on a single image dataset.
+        """
+        test_image_path = "tests/overfit_data/cat_collects_rocks/cat_collects_rocks.jpg"
+        test_annotation_path = "tests/overfit_data/cat_collects_rocks/cat_collects_rocks.json"
+        with open(test_annotation_path, 'r') as f:
+            data = json.load(f)["data"]
+            labels = []
+            boxes = []
+            dummy_targets = []
+            for obj in data["objects"]:
+                labels.append(obj["class_id"])
+                x_min = obj["x_min"]
+                y_min = obj["y_min"]
+                x_max = obj["x_max"]
+                y_max = obj["y_max"]
+                x_center = (x_min + x_max) / 2.0
+                y_center = (y_min + y_max) / 2.0
+                width = x_max - x_min
+                height = y_max - y_min
+                bbox = [x_center, y_center, width, height]
+                boxes.append(bbox)
+            dummy_targets.append({"labels": torch.as_tensor(labels), "boxes": torch.as_tensor(boxes)})
+
+        image = Image.open(test_image_path).convert("RGB")
+        image = image.resize((256, 256))
+        image = np.asarray(image).transpose(2, 0, 1)  # Convert to (C, H, W)
+        image = image / 255.0  # Normalize to [0, 1]
+
+        model, criterion = build_model(name='detr', backbone='resnet50', 
+                                       batch_size=1, num_classes=3,
+                                       num_queries=100)
+        model.to(torch.device('cpu'))
+        model_parameters = get_trainable_parameters(model)
+        optimizer = torch.optim.AdamW(model_parameters, lr=1e-4)
+        for epoch in range(100):  # Train for 20 epochs
+            model.train()
+            input = torch.as_tensor(image, dtype=torch.float32).unsqueeze(0)  # Add batch dimension
+            outputs = model(input)["layer_05"]
+
+            loss_tensor = criterion(outputs, dummy_targets)
+            loss = (loss_tensor.sum() / 1)  # Average over batch size
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            print(f"Epoch {epoch + 1} Loss: {loss.cpu().item()}")
+
+        # Check that bounding boxes are close
+        with torch.no_grad():
+            model.eval()
+            input = torch.as_tensor(image, dtype=torch.float32).unsqueeze(0)  # Add batch dimension
+            outputs = model(input)["layer_05"]
+            pred_boxes = outputs['pred_boxes'].detach().cpu()[0]
+            pred_classes = outputs['pred_logits'].detach().cpu().argmax(-1)[0]
+            for box, label in zip(dummy_targets[0]['boxes'], dummy_targets[0]['labels']):
+                box = self.cxcywh_to_xyxy(box.numpy()[None, ...]).squeeze()
+                pred_boxes = self.cxcywh_to_xyxy(pred_boxes.numpy()).squeeze()
+                iou = self.compute_iou(pred_boxes, box)
+
+                # Get index of box with highest iou
+                max_iou_idx = np.argmax(iou)
+                pred_box = pred_boxes[max_iou_idx]
+                pred_label = pred_classes[max_iou_idx]
+                max_iou = iou[max_iou_idx]
+
+                self.assertGreater(max_iou, 0.75)
+                self.assertEqual(pred_label, label)
 
     @staticmethod
     def compute_iou(boxes1: np.ndarray, box2: np.ndarray) -> np.ndarray:
@@ -111,11 +134,21 @@ class TestDETRModel(unittest.TestCase):
         max_x2 = np.minimum(boxes1[:, 2], box2[2])
         max_y2 = np.minimum(boxes1[:, 3], box2[3])
 
-        inter_area = np.clamp((max_x2 - min_x1), min=0) * np.clamp((max_y2 - min_y1), min=0)
+        inter_area = np.clip((max_x2 - min_x1), a_min=0, a_max=None) * np.clip((max_y2 - min_y1), a_min=0, a_max=None)
         box1_area = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
         box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
         iou = inter_area / (box1_area + box2_area - inter_area + 1e-6)
         return iou
+
+    @staticmethod
+    def cxcywh_to_xyxy(boxes: np.array) -> torch.Tensor:
+        """ Convert bounding boxes from (cx, cy, w, h) to (x_min, y_min, x_max, y_max) format. """
+        cx, cy, w, h = np.split(boxes, 4, axis=-1)
+        x_min = cx - 0.5 * w
+        y_min = cy - 0.5 * h
+        x_max = cx + 0.5 * w
+        y_max = cy + 0.5 * h
+        return np.stack((x_min, y_min, x_max, y_max), axis=-1)
 
 
 if __name__ == '__main__':
