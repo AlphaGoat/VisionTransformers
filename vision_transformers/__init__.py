@@ -25,6 +25,7 @@ def build_model(name: str='detr', backbone: str="resnet50", **kwargs) -> Tuple[t
             num_queries=kwargs.get('num_queries', 100)
         )
         loss = DETRLoss(
+            batch_size=kwargs.get('batch_size', 1),
             num_classes=kwargs.get('num_classes', 91),
             class_weight=kwargs.get('class_weight', 1.0),
             giou_weight=kwargs.get('giou_weight', 1.0),

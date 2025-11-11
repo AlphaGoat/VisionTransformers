@@ -31,21 +31,20 @@ class TestDETRModel(unittest.TestCase):
 
     def test_detr_loss_computation(self):
 
-        model, criterion = build_model(name='detr', backbone='resnet50')
+        model, criterion = build_model(name='detr', backbone='resnet50', 
+                                       batch_size=2, num_classes=92, num_queries=100)
 
         dummy_input = torch.randn(2, 3, 256, 256)  # Batch of 2 images
         outputs = model(dummy_input)["layer_05"]
 
         dummy_targets = [
             {
-                'labels': torch.cat([torch.randint(0, 91, (5,)), torch.zeros(2)]),  # 5 objects. 2 pads
-                'boxes': torch.cat([torch.rand(5, 4), torch.zeros(2, 4)], dim=0),     # 5 bounding boxes, 2 pads
-                "pad_mask": torch.tensor([True, True, True, True, True, False, False])  # Mask indicating valid boxes
+                'labels': torch.randint(1, 91, (5,)),  # 5 objects. 2 pads
+                'boxes': torch.rand(5, 4),     # 5 bounding boxes, 2 pads
             },
             {
-                'labels': torch.cat([torch.randint(0, 91, (3,)), torch.zeros(4)]),  # 3 objects, 4 pads
-                'boxes': torch.cat([torch.rand(3, 4), torch.zeros(4, 4)], dim=0),               # 3 bounding boxes, 4 pads
-                "pad_mask": torch.tensor([True, True, True, False, False, False, False])  # Mask indicating valid boxes
+                'labels': torch.randint(1, 91, (3,)), # 3 objects, 4 pads
+                'boxes': torch.rand(3, 4) # 3 bounding boxes, 4 pads
             }
         ]
 

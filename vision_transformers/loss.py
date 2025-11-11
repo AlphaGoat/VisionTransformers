@@ -11,7 +11,8 @@ from scipy.optimize import linear_sum_assignment
 
 
 class DETRLoss(torch.nn.Module):
-    def __init__(self, num_classes, class_weight=1.0, giou_weight=1.0, bbox_weight=1.0):
+    def __init__(self, batch_size, num_classes, class_weight=1.0, giou_weight=1.0, bbox_weight=1.0):
+        self.batch_size = batch_size
         self.num_classes = num_classes
         self.class_weight = class_weight
         self.giou_weight = giou_weight
@@ -24,20 +25,26 @@ class DETRLoss(torch.nn.Module):
         batch_size, num_queries = pred_bboxes.size(0), pred_bboxes.size(1)
 
         # Flatten batch and query dimension of predictions
-        pred_bboxes = pred_bboxes.flatten(0, 1) # [batch_size * num_queries, 4]
-        pred_probs = pred_probs.flatten(0, 1) # [batch_size * num_queries, 4]
+        pred_bboxes = pred_bboxes #.reshape(-1, 4) # [batch_size * num_queries, 4]
+        pred_probs = pred_probs.reshape(-1, self.num_classes) # [batch_size * num_queries, num_classes]
 
-        # Flatten target / num boxes dimensions for target bboxes
-        target_bboxes = torch.cat([t["boxes"] for t in targets])
-        target_classes = torch.cat([t["labels"] for t in targets])
+        # Prepare targets
+        targets = self._pad_targets(targets, num_queries)
+        target_bboxes = targets["boxes"] #.reshape(-1, 4)  # [total_target_boxes, 4]
+        target_classes = targets["labels"].reshape(-1)  # [total_target_boxes]
 
         # Class cost is negative of pred probability given for target class
-        C_classes = -1. * pred_probs[:, target_classes]
+        C_classes = -1. * torch.gather(pred_probs, 1, target_classes[:, None]).squeeze(1)
+        C_classes = C_classes.reshape(batch_size, -1, 1)
 
         # L1 norm for bounding box cost
         C_boxes = torch.cdist(pred_bboxes, target_bboxes, p=1)
 
-        C_giou = -ops.generalized_box_iou(
+#        C_giou = -ops.generalized_box_iou(
+#            ops.box_convert(pred_bboxes, in_fmt='cxcywh', out_fmt='xyxy'),
+#            ops.box_convert(target_bboxes, in_fmt='cxcywh', out_fmt='xyxy'),
+#        )
+        C_giou = -self._generalized_box_iou(
             ops.box_convert(pred_bboxes, in_fmt='cxcywh', out_fmt='xyxy'),
             ops.box_convert(target_bboxes, in_fmt='cxcywh', out_fmt='xyxy'),
         )
@@ -51,40 +58,53 @@ class DETRLoss(torch.nn.Module):
         # Find the optimum pairs that produce the minimum summation
         indices = [linear_sum_assignment(C_total[i]) for i in range(batch_size)]
 
-        return [(torch.IntTensor(i), torch.IntTensor(j)) for i, j in indices]
+        return [(torch.from_numpy(i), torch.from_numpy(j)) for i, j in indices]
 
     def loss_bboxes(self, p_bboxes, t_bboxes, n_boxes):
         # Bbox loss is just L1 loss
         loss_bbox = F.l1_loss(p_bboxes, t_bboxes, reduction="none")
 
         # Normalize loss by number of boxes in each batch
+        import pdb; pdb.set_trace()
+        loss_bbox = loss_bbox.sum(dim=2)
         loss_bbox /= n_boxes
         return loss_bbox
 
     def loss_giou(self, p_bboxes, t_bboxes, n_boxes):
+        p_bboxes = p_bboxes.reshape(-1, 4)
+        t_bboxes = t_bboxes.reshape(-1, 4)
         loss_giou = 1. - torch.diag(
             ops.generalized_box_iou(
                 ops.box_convert(p_bboxes, in_fmt='cxcywh', out_fmt='xyxy'),
                 ops.box_convert(t_bboxes, in_fmt='cxcywh', out_fmt='xyxy'),
             )
         )
+        loss_giou = loss_giou.reshape(self.batch_size, -1)
+        loss_giou = loss_giou.sum(dim=1)
         loss_giou /= n_boxes
         return loss_giou
 
-    def loss_class(self, p_probs, t_classes, n_boxes, pad_mask):
+    def loss_class(self, p_probs, t_classes, n_boxes):
         loss_class = torch.nn.CrossEntropyLoss()(p_probs, t_classes, reduction="none")
-        loss_class *= pad_mask
+        import pdb; pdb.set_trace()
+        loss_class = loss_class.reshape(self.batch_size, -1)
         loss_class /= n_boxes
         return loss_class
 
     def __call__(self, preds, targets):
+        batch_size = len(targets)
+        num_queries = preds["pred_boxes"].size(1)
 
         # Hungarian matching to find optimum pairs
-        pred_idxs, target_idxs = self.hungarian_matcher(preds, targets)
-        pred_idxs, target_idxs = torch.IntTensor(pred_idxs), torch.IntTensor(target_idxs)
+        indices = self.hungarian_matcher(preds, targets)
+        pred_idxs = torch.cat([i for i, j in indices]).reshape(batch_size, -1)
+        target_idxs = torch.cat([j for i, j in indices]).reshape(batch_size, -1)
+
+        # Prepare targets by padding
+        targets = self._pad_targets(targets, preds["pred_boxes"].size(1))
 
         # Order target indices (makes tracking a little easier...)
-        pred_idxs = pred_idxs[target_idxs.argsort()]
+        pred_idxs = torch.gather(pred_idxs, 1, target_idxs.argsort(dim=1))
 
         # Unpack predictions and targets
         pred_bboxes = preds["pred_boxes"]
@@ -93,25 +113,69 @@ class DETRLoss(torch.nn.Module):
         pred_probs = preds["pred_logits"]
         target_classes = targets["labels"]
 
-        # Zero out predictions corresponding to a pad target box
-        pad_mask = targets["pad_mask"]
-        pred_bboxes *= pad_mask
-        pred_probs *= pad_mask
-
         # Get the number of truth boxes in each batch
-        batch_size = preds.size(0)
-        num_boxes = torch.tensor([t.size(0) for t in torch.split(target_bboxes, batch_size, dim=0)])
+        num_boxes = num_queries
 
         # Calculate losses
         l_bbox = self.loss_bboxes(pred_bboxes, target_bboxes, num_boxes)
         l_giou = self.loss_giou(pred_bboxes, target_bboxes, num_boxes)
-        l_class = self.loss_class(pred_probs, target_classes, num_boxes, pad_mask)
+        l_class = self.loss_class(pred_probs, target_classes, num_boxes)
 
         loss = self.bbox_weight * l_bbox + self.giou_weight * l_giou + \
             self.class_weight * l_class
         loss /= batch_size
         return loss
 
+    def _generalized_box_iou(self, boxes1, boxes2):
+        """ Compute generalized IoU between two sets of boxes. 
+        Args:
+            boxes1 (torch.Tensor): Tensor of shape (N, M, 4) in (x0, y0, x1, y1) format.
+            boxes2 (torch.Tensor): Tensor of shape (N, K, 4) in (x0, y0, x1, y1) format.
+        """
+
+        # Calculate the intersection between boxes
+        gious = []
+        for b in range(self.batch_size):
+            b1 = boxes1[b]
+            b2 = boxes2[b]
+            x_min = torch.max(b1[:, None, 0], b2[:, 0])
+            y_min = torch.max(b1[:, None, 1], b2[:, 1])
+            x_max = torch.min(b1[:, None, 2], b2[:, 2])
+            y_max = torch.min(b1[:, None, 3], b2[:, 3])
+
+            inter_area = torch.clamp(x_max - x_min, min=0) * torch.clamp(y_max - y_min, min=0)
+
+            # Calculate the area of each box
+            area1 = (b1[:, None, 2] - b1[:, 0]) * (b1[:, None, 3] - b1[..., 1])
+            area2 = (b2[:, None, 2] - b2[:, 0]) * (b2[:, None, 3] - b2[..., 1])
+
+            union_area = area1 + area2 - inter_area
+            iou = (inter_area / (union_area + 1e-6)).clamp(min=0., max=1.)
+
+            # Calculate the area of the smallest enclosing box
+            enclose_x_min = torch.min(b1[:, None, 0], b2[:, 0])
+            enclose_y_min = torch.min(b1[:, None, 1], b2[:, 1])
+            enclose_x_max = torch.max(b1[:, None, 2], b2[:, 2])
+            enclose_y_max = torch.max(b1[:, None, 3], b2[:, 3])
+
+            enclose_area = torch.clamp(enclose_x_max - enclose_x_min, min=0) * torch.clamp(enclose_y_max - enclose_y_min, min=0)
+
+            # Calculate generalized IoU
+            gious.append(iou - (enclose_area - union_area) / (enclose_area + 1e-6))
+
+        gious = torch.stack(gious, dim=0) 
+        return gious
+
+    @staticmethod
+    def _pad_targets(targets, num_queries):
+        """ Pad target boxes and classes to match number of queries. """
+        target_bboxes = [t["boxes"] for t in targets]
+        target_classes = [t["labels"] for t in targets]
+
+        padded_boxes = torch.stack([F.pad(bboxes, (0, 0, 0, num_queries - bboxes.size(0)), value=0) for bboxes in target_bboxes])
+        padded_labels = torch.stack([F.pad(labels, (0, num_queries - labels.size(0)), value=0) for labels in target_classes])
+
+        return {"boxes": padded_boxes, "labels": padded_labels}
 
 #class DETRLoss(torch.nn.Module):
 #    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):

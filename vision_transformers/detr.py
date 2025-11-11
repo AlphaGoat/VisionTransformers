@@ -151,7 +151,7 @@ class DETRBase(torch.nn.Module):
             torch.nn.Softmax(),
         )
         self.detection_head = torch.nn.Sequential(
-            torch.nn.Linear(d_model, num_classes),
+            torch.nn.Linear(d_model, 4),
             torch.nn.Sigmoid(),
         )
 
