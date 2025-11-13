@@ -2,7 +2,7 @@ import torch
 from collections import OrderedDict
 
 from .utils import get_output_shape, initialize_parameters
-from .layers import MultiHeadAttention, SinusoidalPositionalEncoding
+from .layers import MultiHeadAttention, get_positional_encoding
 
 
 class DETREncoder(torch.nn.Module):
@@ -13,10 +13,7 @@ class DETREncoder(torch.nn.Module):
         self.nhead = nhead
         self.num_layers = num_layers
 
-        if positional_encoding == "sinusoidal":
-            self.pos_encoding = SinusoidalPositionalEncoding(num_tokens, d_model)
-        else:
-            raise NotImplementedError(f"{positional_encoding} positional encoding not implemented.")
+        self.pos_encoding = get_positional_encoding(positional_encoding, num_tokens, d_model)
 
         self.self_attn_layers = torch.nn.ModuleList()
         self.feed_forward_layers = torch.nn.ModuleList()
@@ -34,8 +31,8 @@ class DETREncoder(torch.nn.Module):
         for i in range(self.num_layers):
             # Self attention on input image features
             x = self.self_attn_layers[i]["self_attn"](
-                features + self.pos_encoding.pe,
-                features + self.pos_encoding.pe,
+                self.pos_encoding(features),
+                self.pos_encoding(features),
                 features
             )
             x = self.self_attn_layers[i]["self_attn_norm"](x + features)
@@ -54,13 +51,10 @@ class DETRDecoder(torch.nn.Module):
         self.d_model = d_model
         self.nhead = nhead
         self.num_layers = num_layers
-        
-        if positional_encoding == "sinusoidal":
-            self.self_attn_pos_encoding = SinusoidalPositionalEncoding(num_queries, d_model)
-            self.cross_attn_pos_encoding = SinusoidalPositionalEncoding(num_tokens, d_model)
-        else:
-            raise NotImplementedError(f"{positional_encoding} positional encoding not implemented.")
 
+        self.self_attn_pos_encoding = get_positional_encoding(positional_encoding, num_queries, d_model)
+        self.cross_attn_pos_encoding = get_positional_encoding(positional_encoding, num_tokens, d_model)
+        
         self.self_attn_layers = torch.nn.ModuleList()
         self.cross_attn_layers = torch.nn.ModuleList()
         self.feed_forward_layers = torch.nn.ModuleList()
@@ -84,16 +78,16 @@ class DETRDecoder(torch.nn.Module):
         for i in range(self.num_layers):
             # Self attention on object queries
             x = self.self_attn_layers[i]["self_attn"](
-                object_queries + self.self_attn_pos_encoding.pe,
-                object_queries + self.self_attn_pos_encoding.pe,
+                self.self_attn_pos_encoding(object_queries),
+                self.self_attn_pos_encoding(object_queries),
                 object_queries
             )
             x = self.self_attn_layers[i]["self_attn_norm"](x + object_queries)
 
             # Cross attention on object queries as well as encoder outputs
             cross_attn_out = self.cross_attn_layers[i]["cross_attn"](
-                object_queries + x + self.self_attn_pos_encoding.pe,
-                encoder_out + self.cross_attn_pos_encoding.pe,
+                self.self_attn_pos_encoding(object_queries + x),
+                self.cross_attn_pos_encoding(encoder_out),
                 encoder_out
             )
             x = self.cross_attn_layers[i]["cross_attn_norm"](cross_attn_out + x)
@@ -146,7 +140,7 @@ class DETRBase(torch.nn.Module):
         # Detection and classification heads
         self.classification_head = torch.nn.Sequential(
             torch.nn.Linear(d_model, num_classes),
-            torch.nn.Softmax(),
+            torch.nn.Softmax(dim=-1),
         )
         self.detection_head = torch.nn.Sequential(
             torch.nn.Linear(d_model, 4),

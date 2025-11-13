@@ -20,7 +20,11 @@ def build_model(name: str='detr', backbone: str="resnet50", **kwargs) -> Tuple[t
     """
     if name == 'detr':
         model =  DETRBase(
-            backbone=build_vision_transformer_backbone(backbone), 
+            backbone=build_vision_transformer_backbone(
+                backbone, 
+                pretrained=kwargs.get('pretrained', True), 
+                train_backbone=kwargs.get('train_backbone', False)
+            ),
             num_classes=kwargs.get('num_classes', 91),
             num_queries=kwargs.get('num_queries', 100)
         )
@@ -33,7 +37,11 @@ def build_model(name: str='detr', backbone: str="resnet50", **kwargs) -> Tuple[t
         )
     elif name == 'deformable_detr':
         model = DeformableDETRBase(
-            backbone=build_deformable_detr_backbone(backbone), 
+            backbone=build_deformable_detr_backbone(
+                backbone,
+                pretrained=kwargs.get('pretrained', True), 
+                train_backbone=kwargs.get('train_backbone', False)
+            ),
             num_classes=kwargs.get('num_classes', 91),
             num_queries=kwargs.get('num_queries', 100)
         )

@@ -1,2 +1,2 @@
 from .attention import MultiHeadAttention, AttentionLayer
-from .position_encodings import SinusoidalPositionalEncoding
+from .position_encodings import SinusoidalPositionalEncoding, LearnedPositionalEncoding, get_positional_encoding

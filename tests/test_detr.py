@@ -13,6 +13,9 @@ from PIL import Image
 
 from vision_transformers import build_model
 from vision_transformers.utils import get_trainable_parameters
+from vision_transformers.loss import DETRLoss
+from utils.hooks import get_layer_statistics
+from utils.logger import Logger
 
 
 class TestDETRModel(unittest.TestCase):
@@ -57,6 +60,35 @@ class TestDETRModel(unittest.TestCase):
         self.assertTrue(math.isfinite(loss))
         self.assertTrue(math.isnan(loss) == False)
 
+    def test_hungarian_matching(self):
+        batch_size = 2
+        criterion = DETRLoss(num_classes=3, batch_size=batch_size)
+        outputs = {
+            'pred_logits': torch.tensor([[[0.1, 0.1, 0.8], [0.1, 0.8, 0.1]],
+                                         [[0.4, 0.3, 0.3], [0.1, 0.7, 0.2]]]),  # (B, num_queries, num_classes)
+            'pred_boxes': torch.tensor([[[0.3, 0.3, 0.4, 0.4],
+                                         [0.1, 0.1, 0.2, 0.2]],
+                                         [[0.2, 0.2, 0.8, 0.8],   # (B, num_queries, 4)
+                                          [0.5, 0.5, 0.6, 0.6]]]),
+        }
+        targets = [
+            {
+                'labels': torch.tensor([2, 1]),
+                'boxes': torch.tensor([[0.1, 0.1, 0.2, 0.2],
+                                       [0.3, 0.3, 0.4, 0.4]])
+            },
+            {
+                'labels': torch.tensor([1]),
+                'boxes': torch.tensor([[0.5, 0.5, 0.6, 0.6]])
+            }
+        ]
+        indices = criterion.hungarian_matcher(outputs, targets)
+        indices = [(i.cpu().numpy(), j.cpu().numpy()) for i, j in indices]
+        self.assertEqual(len(indices), batch_size)
+        self.assertEqual(len(indices[0][0]), 2)  # First batch has 2 matches
+        self.assertEqual(indices[0][0].tolist(), [0, 1])
+        self.assertEqual(indices[1][1].tolist(), [1, 0])  # Second batch has 1 match
+
     def test_overfit(self):
         """
         Test if the DETR model can overfit on a single image dataset.
@@ -87,13 +119,22 @@ class TestDETRModel(unittest.TestCase):
         image = np.asarray(image).transpose(2, 0, 1)  # Convert to (C, H, W)
         image = image / 255.0  # Normalize to [0, 1]
 
+        # Remove any existing logs
+        import shutil, os
+        if os.path.exists("tests/overfit_data/logs"):
+            shutil.rmtree("tests/overfit_data/logs")
+
+        # Initialize logger object to keep track of statistics
+        logger = Logger(log_dir="tests/overfit_data/logs")
+
         model, criterion = build_model(name='detr', backbone='resnet50', 
                                        batch_size=1, num_classes=3,
-                                       num_queries=100)
+                                       num_queries=100, train_backbone=True,
+                                       class_weight=5.0)
         model.to(torch.device('cpu'))
         model_parameters = get_trainable_parameters(model)
         optimizer = torch.optim.AdamW(model_parameters, lr=1e-4)
-        for epoch in range(100):  # Train for 20 epochs
+        for epoch in range(20):  # Train for 20 epochs
             model.train()
             input = torch.as_tensor(image, dtype=torch.float32).unsqueeze(0)  # Add batch dimension
             outputs = model(input)["layer_05"]
@@ -105,6 +146,10 @@ class TestDETRModel(unittest.TestCase):
             loss.backward()
             optimizer.step()
             print(f"Epoch {epoch + 1} Loss: {loss.cpu().item()}")
+
+            # Get layer statistics after each epoch of training
+            layer_statistics = get_layer_statistics(model)
+            logger.log_metrics(step=epoch, layer_stats=layer_statistics)
 
         # Check that bounding boxes are close
         with torch.no_grad():

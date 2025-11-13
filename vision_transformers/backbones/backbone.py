@@ -7,6 +7,7 @@ Date: 07 October 2025
 from torchvision.models import resnet50, resnet101, vgg16
 from torchvision.models.feature_extraction import create_feature_extractor
 from vision_transformers.backbones.resnet_3d_conv import Resnet50With3dConv
+from vision_transformers.utils import initialize_parameters
 
 
 def fetch_resnet50_with_def_detr_hooks(pretrained=True):
@@ -53,5 +54,8 @@ def build_vision_transformer_backbone(name='resnet50', pretrained=True, train_ba
 
     for param in backbone.parameters():
         param.requires_grad = train_backbone
+
+    if train_backbone and not pretrained:
+        initialize_parameters(backbone, reset_backbone=True)
 
     return backbone
