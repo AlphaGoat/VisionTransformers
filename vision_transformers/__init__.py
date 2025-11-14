@@ -25,6 +25,7 @@ def build_model(name: str='detr', backbone: str="resnet50", **kwargs) -> Tuple[t
                 pretrained=kwargs.get('pretrained', True), 
                 train_backbone=kwargs.get('train_backbone', False)
             ),
+            image_shape=kwargs.get('image_shape', (3, 256, 256)),
             num_classes=kwargs.get('num_classes', 91),
             num_queries=kwargs.get('num_queries', 100)
         )

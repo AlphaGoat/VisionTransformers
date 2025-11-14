@@ -9,8 +9,9 @@ import torch
 from torch.autograd import Function
 from collections import OrderedDict
 
-from .layers import SinusoidalPositionalEncoding
-from .utils import get_num_output_channels
+from .layers import SinusoidalPositionalEncoding, MultiHeadAttention
+from .utils import get_num_output_channels, initialize_parameters
+from .cuda import deformable_attn_cuda
 
 
 class DeformableAttention(Function):
@@ -95,10 +96,16 @@ class DeformableAttentionModule(torch.nn.Module):
         # Add offsets to reference points
         sampling_points = reference_points.unsqueeze(1) + offsets.view(feature_map.size(0), -1, self.nhead, 2)
 
-        # Call the CUDA kernel for deformable attention
+        # Call CUDA kernel for bilinear interpolation of sampling points
+        sampled_features = deformable_attn_cuda.bilinear_interpolate(feature_map, sampling_points)
 
-        attn_output = self.deformable_attention(
-            feature_map, sampling_points, queries, self.W_k, self.W_v, self.nhead
+        # Generate keys and values
+        keys = torch.matmul(sampled_features, self.W_k)
+        values = torch.matmul(sampled_features, self.W_v)
+
+        # Call multihead attention
+        attn_output = self.multihead_attention(
+            queries, keys, values, reference_points, self.nhead
         )
 
         return attn_output
@@ -121,10 +128,12 @@ class DeformableAttentionModule(torch.nn.Module):
 
 
 class DeformableAttentionTransformerClassifier(torch.nn.Module):
-    def __init__(self, backbone, image_shape=(3, 256, 256), nhead=8, num_classes=100, position_encoding="sinusoidal"):
+    def __init__(self, backbone, image_shape=(3, 256, 256), 
+                 nhead=8, num_classes=100, position_encoding="sinusoidal"):
         super(DeformableAttentionTransformerClassifier, self).__init__()
         self.backbone = backbone
         self.nhead = nhead
+        self.num_classes = num_classes
 
         # The dimension of the model is the number of channels output by the backbone
         self.d_model = get_num_output_channels(backbone, image_shape)
@@ -138,15 +147,104 @@ class DeformableAttentionTransformerClassifier(torch.nn.Module):
         else:
             raise ValueError("Unknown positional encoding type")
 
+        self.patch_embedding_1 = torch.nn.Sequential(
+            OrderedDict({
+                "conv4x4": torch.nn.Conv2d(
+                    in_channels=image_shape[0],
+                    out_channels=self.d_model,
+                    kernel_size=4,
+                    stride=4
+                ),
+                "batch_norm": torch.nn.BatchNorm2d(self.d_model),
+                "activation": torch.nn.GELU(),
+                "layer_norm": torch.nn.LayerNorm(self.d_model)
+            })
+        )
+
+
+        self.patch_embedding_2 = torch.nn.Sequential(
+            OrderedDict({
+                "conv2x2": torch.nn.Conv2d(
+                    in_channels=self.d_model,
+                    out_channels=2 * self.d_model,
+                    kernel_size=2,
+                    stride=2
+                ),
+                "batch_norm": torch.nn.BatchNorm2d(self.d_model),
+                "activation": torch.nn.GELU(),
+                "layer_norm": torch.nn.LayerNorm(self.d_model)
+            })
+        )
+
+        self.patch_embedding_3 = torch.nn.Sequential(
+            OrderedDict({
+                "conv2x2": torch.nn.Conv2d(
+                    in_channels=2 * self.d_model,
+                    out_channels=4 * self.d_model,
+                    kernel_size=2,
+                    stride=2
+                ),
+                "batch_norm": torch.nn.BatchNorm2d(self.d_model),
+                "activation": torch.nn.GELU(),
+                "layer_norm": torch.nn.LayerNorm(self.d_model)
+            })
+        )
+
+        self.patch_embedding_4 = torch.nn.Sequential(
+            OrderedDict({
+                "conv2x2": torch.nn.Conv2d(
+                    in_channels=4 * self.d_model,
+                    out_channels=8 * self.d_model,
+                    kernel_size=2,
+                    stride=2
+                ),
+                "batch_norm": torch.nn.BatchNorm2d(self.d_model),
+                "activation": torch.nn.GELU(),
+                "layer_norm": torch.nn.LayerNorm(self.d_model)
+            })
+        )
+
+        # Different stages of DAT architecture
+        self.stage1 = torch.nn.Sequential(
+            OrderedDict({
+                "local_attention": MultiHeadAttention(self.d_model, nhead),
+                "shift_window_attention": ShifedtWindowAttention(self.d_model, nhead)
+            })
+        )
+        self.stage2 = torch.nn.Sequential(
+            OrderedDict({
+                "local_attention": MultiHeadAttention(2 * self.d_model, nhead),
+                "shift_window_attention": ShiftedWindowAttention(2 * self.d_model, nhead)
+            })
+        )
+        self.stage3 = torch.nn.Sequential(
+            OrderedDict({
+                "local_attention": MultiHeadAttention(4 * self.d_model, nhead),
+                "deformable_attention": DeformableAttentionModule(4 * self.d_model, nhead)
+            })
+        )
+        self.stage4 = torch.nn.Sequential(
+            OrderedDict({
+                "local_attention": MultiHeadAttention(8 * self.d_model, nhead),
+                "deformable_attention": DeformableAttentionModule(8 * self.d_model, nhead)
+            })
+        )
+
         # Deformable Attention Layer
         self.deformable_attention = DeformableAttention(self.d_model, nhead)
 
         # Classifier head
-        self.classifier = torch.nn.Linear(self.d_model, num_classes)
+        self.classifier = torch.nn.Linear(8 * self.d_model, num_classes)
+
+        # Initialize layer parameters
+        initialize_parameters(self)
 
     def forward(self, x):
-        # Extract features using the backbone
-        features = self.backbone(x)  # Assume features shape: (batch_size, C, H, W)
+        # Generate image patches
+        patches = self.generate_image_patches(x)
+
+        # Patch embedding
+
 
         attn_output, _ = self.deformable_attention(features)
 

@@ -115,7 +115,7 @@ class TestDETRModel(unittest.TestCase):
             dummy_targets.append({"labels": torch.as_tensor(labels), "boxes": torch.as_tensor(boxes)})
 
         image = Image.open(test_image_path).convert("RGB")
-        image = image.resize((256, 256))
+        image = image.resize((512, 512))
         image = np.asarray(image).transpose(2, 0, 1)  # Convert to (C, H, W)
         image = image / 255.0  # Normalize to [0, 1]
 
@@ -129,8 +129,9 @@ class TestDETRModel(unittest.TestCase):
 
         model, criterion = build_model(name='detr', backbone='resnet50', 
                                        batch_size=1, num_classes=3,
+                                       image_shape=(3, 512, 512),
                                        num_queries=100, train_backbone=True,
-                                       class_weight=5.0)
+                                       class_weight=5.0, positional_encoding="learned")
         model.to(torch.device('cpu'))
         model_parameters = get_trainable_parameters(model)
         optimizer = torch.optim.AdamW(model_parameters, lr=1e-4)

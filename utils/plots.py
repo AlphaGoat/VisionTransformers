@@ -56,6 +56,23 @@ def plot_bboxes(image, bboxes, labels=None):
     plt.show()
 
 
+def plot_attention_for_each_query(attn_weights, image, query_indices):
+    for i, query_idx in enumerate(query_indices):
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 3, 1)
+        plt.title(f"Query {query_idx} - Attention Weights")
+        plt.imshow(attn_weights[query_idx], aspect='auto', cmap='viridis')
+        plt.colorbar()
+        plt.subplot(1, 3, 2)
+        plt.title(f"Query {query_idx} - Image")
+        plt.imshow(image)
+        plt.subplot(1, 3, 3)
+        plt.title(f"Query {query_idx} - Combined")
+        plt.imshow(attn_weights[query_idx] * image, aspect='auto', cmap='viridis')
+        plt.colorbar()
+        plt.show()
+
+
 if __name__ == "__main__":
     # Example usage
     dummy_input = torch.randn(1, 3, 126 * 126)  # (batch_size, num_channels, width * height)

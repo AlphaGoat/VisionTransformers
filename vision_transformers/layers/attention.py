@@ -1,7 +1,13 @@
+"""
+Module for attention layers used in Vision Transformers.
+
+Author: Peter Thomas
+Date: 13 November 2025
+"""
 import torch
 
 
-class AttentionLayer(torch.nn.Module):
+class ScaledDotProductAttentionLayer(torch.nn.Module):
     def __init__(self, d_model, nhead):
         super().__init__()
         self.d_model = d_model
@@ -27,7 +33,7 @@ class MultiHeadAttention(torch.nn.Module):
         self.d_model = d_model
         self.nhead = nhead
         assert d_model % nhead == 0, "d_model must be divisible by nhead"
-        self.attention_layers = torch.nn.ModuleList([AttentionLayer(d_model // nhead, nhead) for _ in range(nhead)])
+        self.attention_layers = torch.nn.ModuleList([ScaledDotProductAttentionLayer(d_model // nhead) for _ in range(nhead)])
         self.linear = torch.nn.Linear(d_model, d_model)
 
     def forward(self, query, key, value):
@@ -43,3 +49,48 @@ class MultiHeadAttention(torch.nn.Module):
         output = self.linear(concat_attn)
         return output
 
+
+class ShiftedWindowAttention(torch.nn.Module):
+    def __init__(self, d_model, nhead, window_size=7, shift_size=3):
+        super().__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        self.window_size = window_size
+        self.shift_size = shift_size
+
+        assert d_model % nhead == 0, "d_model must be divisible by nhead"
+
+        self.attention = MultiHeadAttention(d_model, nhead)
+
+    def forward(self, x):
+        # Extract windows from input patches
+        windows = self.extract_windows(x)
+        attn_output = self.attention(windows, windows, windows)
+        return attn_output
+
+    def extract_windows(self, x):
+        """
+        Extract non-overlapping windows from the input patch embeddings.
+        Args:
+            x (torch.Tensor): Input patch embeddings of shape (B, H, W, C).
+        Returns:
+            torch.Tensor: Extracted windows of shape (num_windows*B, window_size*window_size, C).
+        """
+        (B, H, W, C) = x.size()
+        x = x.view(B, H // self.window_size, self.window_size, W // self.window_size, self.window_size, C)
+        x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, self.window_size * self.window_size, C)
+        return x
+
+    def combine_windows(self, x, original_size):
+        """
+        Combine windows back to the original patch embedding shape.
+        Args:
+            x (torch.Tensor): Windows of shape (num_windows*B, window_size*window_size, C).
+            original_size (tuple): Original size (B, H, W, C).
+        Returns:
+            torch.Tensor: Combined patch embeddings of shape (B, H, W, C).
+        """
+        (B, H, W, C) = original_size
+        x = x.view(B, H // self.window_size, W // self.window_size, self.window_size, self.window_size, C)
+        x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, C)
+        return x

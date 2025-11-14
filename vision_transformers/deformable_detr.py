@@ -87,6 +87,19 @@ class DeformableCrossAttention(torch.nn.Module):
         pass
 
 
+class DeformableAttention(torch.nn.Module):
+    def __init__(self, d_model, nhead, num_offsets):
+        super().__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        self.num_offsets = num_offsets
+
+        # Initialize multihead attention
+
+    def forward(self, query, key, value, reference_points):
+        pass
+
+
 class DeformableDETRBase(torch.nn.Module):
     def __init__(self, backbone, num_classes, num_queries):
         super().__init__()
