@@ -70,7 +70,8 @@ class DeformableAttentionModule(torch.nn.Module):
                                                           kernel_size=5, groups=self.downsample_factor)),
                 ("offset_layer_norm", torch.nn.LayerNorm(d_model)),
                 ("offset_gelu", torch.nn.GELU()),
-                ("offset_conv", torch.nn.Conv2d(d_model, nhead * 2, kernel_size=1))
+                ("offset_conv", torch.nn.Conv2d(d_model, nhead * 2, kernel_size=1)),
+                ("offset_tanh", torch.nn.Tanh())
             ])
         )
 
@@ -100,8 +101,8 @@ class DeformableAttentionModule(torch.nn.Module):
         sampled_features = deformable_attn_cuda.bilinear_interpolate(feature_map, sampling_points)
 
         # Generate keys and values
-        keys = torch.matmul(sampled_features, self.W_k)
-        values = torch.matmul(sampled_features, self.W_v)
+        keys = torch.bmm(sampled_features, self.W_k)
+        values = torch.bmm(sampled_features, self.W_v)
 
         # Call multihead attention
         attn_output = self.multihead_attention(
@@ -126,9 +127,19 @@ class DeformableAttentionModule(torch.nn.Module):
 
         return reference_points
 
+    def multihead_attention(self, query, key, value):
+        query = query.view(query.size(0), query.size(1), self.nhead, -1).transpose(1, 2)
+        key = key.view(key.size(0), key.size(1), self.nhead, -1).transpose(1, 2)
+        value = value.view(value.size(0), value.size(1), self.nhead, -1).transpose(1, 2)
+
+        attn_outputs = [attn_layer(q.squeeze(1), k.squeeze(1), v.squeeze(1)) for attn_layer, q, k, v in
+                        zip(self.attention_layers, torch.split(query, 1, dim=1),
+                            torch.split(key, 1, dim=1), torch.split(value, 1, dim=1))]
+        pass
+
 
 class ShiftedWindowAttentionStage(torch.nn.Module):
-    def __init__(self, d_model, nhead, window_size=7, shift_size=3):
+    def __init__(self, d_model, nhead, window_size=7, shift_size=3, num_layers=1):
         super(ShiftedWindowAttentionStage, self).__init__()
         self.d_model = d_model
         self.nhead = nhead
@@ -137,35 +148,40 @@ class ShiftedWindowAttentionStage(torch.nn.Module):
 
         assert d_model % nhead == 0, "d_model must be divisible by nhead"
 
-        self.local_attention = MultiHeadAttention(d_model, nhead)
-        self.shifted_window_attention = ShiftedWindowAttention(d_model, nhead, window_size, shift_size)
+        self.local_attention_modules = torch.nn.ModuleList([MultiHeadAttention(d_model, nhead) for _ in range(num_layers)])
+        self.shifted_window_attention_modules = torch.nn.ModuleList([ShiftedWindowAttention(d_model, nhead, window_size, shift_size) for _ in range(num_layers)])
 
     def forward(self, x):
         # First local attention on patch inputs
-        local_attn_output = self.local_attention(x, x, x)
+        layer_input = x
+        for i in range(self.num_layers):
+            local_attn_output = self.local_attention_modules[i](layer_input, layer_input, layer_input)
+            layer_input = attn_output = self.shifted_window_attention_modules[i](local_attn_output)
 
         # Then shifted window attention
-        attn_output = self.shifted_window_attention(local_attn_output)
         return attn_output
 
 
 class DeformableAttentionStage(torch.nn.Module):
-    def __init__(self, d_model, nhead):
+    def __init__(self, d_model, nhead, num_layers=1):
         super(DeformableAttentionStage, self).__init__()
         self.d_model = d_model
         self.nhead = nhead
+        self.num_layers = num_layers
 
         assert d_model % nhead == 0, "d_model must be divisible by nhead"
 
-        self.local_attention = MultiHeadAttention(d_model, nhead)
-        self.deformable_attention = DeformableAttentionModule(d_model, nhead)
+        self.local_attention_modules = torch.nn.ModuleList([MultiHeadAttention(d_model, nhead) for _ in range(num_layers)])
+        self.deformable_attention_modules = torch.nn.ModuleList([DeformableAttentionModule(d_model, nhead) for _ in range(num_layers)])
 
     def forward(self, x):
-        # First local attention on patch inputs
-        local_attn_output = self.local_attention(x, x, x)
+        layer_input = x
+        for i in range(self.num_layers):
+            # First local attention on patch inputs
+            local_attn_output = self.local_attention_modules[i](layer_input, layer_input, layer_input)
 
-        # Then deformable attention
-        attn_output = self.deformable_attention(local_attn_output)
+            # Then deformable attention
+            layer_input = attn_output = self.deformable_attention_modules[i](local_attn_output)
         return attn_output
 
 

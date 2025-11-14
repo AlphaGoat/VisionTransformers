@@ -7,6 +7,7 @@ Date: 07 October 2025
 from torchvision.models import resnet50, resnet101, vgg16
 from torchvision.models.feature_extraction import create_feature_extractor
 from vision_transformers.backbones.resnet_3d_conv import Resnet50With3dConv
+from vision_transformers.dat import DeformableAttentionTransformer
 from vision_transformers.utils import initialize_parameters
 
 
@@ -47,6 +48,9 @@ def build_vision_transformer_backbone(name='resnet50', pretrained=True, train_ba
         backbone = resnet101(pretrained=pretrained)
     elif name == 'resnet50_with_3dconv':
         backbone = Resnet50With3dConv(classification_head=False)
+    elif name == "deformable_attention_transformer":
+        model = DeformableAttentionTransformer()
+        backbone = create_feature_extractor(model, return_nodes={"backbone": "feature_map"})
     elif name == "vgg16":
         backbone = vgg16(pretrained=pretrained).features
     else:
