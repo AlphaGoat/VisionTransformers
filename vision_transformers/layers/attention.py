@@ -16,6 +16,11 @@ class ScaledDotProductAttentionLayer(torch.nn.Module):
         self.W_k = torch.nn.Linear(d_model, d_model, bias=False)
         self.W_v = torch.nn.Linear(d_model, d_model, bias=False)
 
+        # Initialize weights for Q, K, V
+        torch.nn.init.xavier_uniform_(self.W_q.weight)
+        torch.nn.init.xavier_uniform_(self.W_k.weight)
+        torch.nn.init.xavier_uniform_(self.W_v.weight)
+
     def forward(self, query, key, value):
         Q = self.W_q(query)
         K = self.W_k(key)
@@ -34,7 +39,10 @@ class MultiHeadAttention(torch.nn.Module):
         self.nhead = nhead
         assert d_model % nhead == 0, "d_model must be divisible by nhead"
         self.attention_layers = torch.nn.ModuleList([ScaledDotProductAttentionLayer(d_model // nhead) for _ in range(nhead)])
-        self.linear = torch.nn.Linear(d_model, d_model)
+        self.linear = torch.nn.Linear(d_model, d_model, bias=False)
+
+        # Initialize linear projection weights
+        torch.nn.init.xavier_uniform_(self.linear.weight)
 
     def forward(self, query, key, value):
         # Divide queries, keys, values for each head
@@ -60,12 +68,21 @@ class ShiftedWindowAttention(torch.nn.Module):
 
         assert d_model % nhead == 0, "d_model must be divisible by nhead"
 
-        self.attention = MultiHeadAttention(d_model, nhead)
+        self.windowed_self_attn = MultiHeadAttention(d_model, nhead)
+        self.shifted_self_attn = MultiHeadAttention(d_model, nhead)
 
     def forward(self, x):
         # Extract windows from input patches
         windows = self.extract_windows(x)
-        attn_output = self.attention(windows, windows, windows)
+        attn_output = self.windowed_self_attn(windows, windows, windows)
+        attn_output = self.combine_windows(attn_output, x.size())
+        # Shift the input and apply shifted attention
+        shifted_x = self.shift_horizontally_and_vertically(x, shift_size=self.shift_size // 2)
+        shifted_windows = self.extract_windows(shifted_x)
+        shifted_attn_output = self.shifted_self_attn(shifted_windows, shifted_windows, shifted_windows)
+        shifted_attn_output = self.combine_windows(shifted_attn_output, shifted_x.size())
+        # Reverse the shift
+        attn_output = self.shift_horizontally_and_vertically(shifted_attn_output, shift_size=-self.shift_size // 2)
         return attn_output
 
     def extract_windows(self, x):
@@ -94,3 +111,14 @@ class ShiftedWindowAttention(torch.nn.Module):
         x = x.view(B, H // self.window_size, W // self.window_size, self.window_size, self.window_size, C)
         x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, C)
         return x
+
+    def shift_horizontally_and_vertically(self, x, shift_size=None):
+        """
+        Shift the input patch embeddings horizontally and vertically by shift_size.
+        Args:
+            x (torch.Tensor): Input patch embeddings of shape (B, H, W, C).
+        Returns:
+            torch.Tensor: Shifted patch embeddings of shape (B, H, W, C).
+        """
+        shifted_x = torch.roll(x, shifts=(shift_size, shift_size), dims=(1, 2))
+        return shifted_x

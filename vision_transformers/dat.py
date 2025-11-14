@@ -9,7 +9,7 @@ import torch
 from torch.autograd import Function
 from collections import OrderedDict
 
-from .layers import SinusoidalPositionalEncoding, MultiHeadAttention
+from .layers import SinusoidalPositionalEncoding, MultiHeadAttention, ShiftedWindowAttention
 from .utils import get_num_output_channels, initialize_parameters
 from .cuda import deformable_attn_cuda
 
@@ -127,16 +127,74 @@ class DeformableAttentionModule(torch.nn.Module):
         return reference_points
 
 
+class ShiftedWindowAttentionStage(torch.nn.Module):
+    def __init__(self, d_model, nhead, window_size=7, shift_size=3):
+        super(ShiftedWindowAttentionStage, self).__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        self.window_size = window_size
+        self.shift_size = shift_size
+
+        assert d_model % nhead == 0, "d_model must be divisible by nhead"
+
+        self.local_attention = MultiHeadAttention(d_model, nhead)
+        self.shifted_window_attention = ShiftedWindowAttention(d_model, nhead, window_size, shift_size)
+
+    def forward(self, x):
+        # First local attention on patch inputs
+        local_attn_output = self.local_attention(x, x, x)
+
+        # Then shifted window attention
+        attn_output = self.shifted_window_attention(local_attn_output)
+        return attn_output
+
+
+class DeformableAttentionStage(torch.nn.Module):
+    def __init__(self, d_model, nhead):
+        super(DeformableAttentionStage, self).__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+
+        assert d_model % nhead == 0, "d_model must be divisible by nhead"
+
+        self.local_attention = MultiHeadAttention(d_model, nhead)
+        self.deformable_attention = DeformableAttentionModule(d_model, nhead)
+
+    def forward(self, x):
+        # First local attention on patch inputs
+        local_attn_output = self.local_attention(x, x, x)
+
+        # Then deformable attention
+        attn_output = self.deformable_attention(local_attn_output)
+        return attn_output
+
+
+class PatchEmbedding(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride):
+        super(PatchEmbedding, self).__init__()
+        self.proj = torch.nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride)
+        self.batch_norm = torch.nn.BatchNorm2d(out_channels)
+        self.activation = torch.nn.GELU()
+        self.norm = torch.nn.LayerNorm(out_channels)
+
+        # Initialize projection weights
+        torch.nn.init.xavier_uniform_(self.proj.weight)
+
+    def forward(self, x):
+        x = self.proj(x)  # (B, out_channels, H', W')
+        x = self.batch_norm(x)
+        x = self.activation(x)
+        x = self.norm(x)
+        return x
+
+
 class DeformableAttentionTransformerClassifier(torch.nn.Module):
-    def __init__(self, backbone, image_shape=(3, 256, 256), 
+    def __init__(self, d_model, image_shape=(3, 256, 256), 
                  nhead=8, num_classes=100, position_encoding="sinusoidal"):
         super(DeformableAttentionTransformerClassifier, self).__init__()
-        self.backbone = backbone
+        self.d_model = d_model
         self.nhead = nhead
         self.num_classes = num_classes
-
-        # The dimension of the model is the number of channels output by the backbone
-        self.d_model = get_num_output_channels(backbone, image_shape)
 
         # Assert that d_model is divisible by nhead
         assert self.d_model % nhead == 0, "d_model must be divisible by nhead"
@@ -147,108 +205,59 @@ class DeformableAttentionTransformerClassifier(torch.nn.Module):
         else:
             raise ValueError("Unknown positional encoding type")
 
-        self.patch_embedding_1 = torch.nn.Sequential(
-            OrderedDict({
-                "conv4x4": torch.nn.Conv2d(
-                    in_channels=image_shape[0],
-                    out_channels=self.d_model,
-                    kernel_size=4,
-                    stride=4
-                ),
-                "batch_norm": torch.nn.BatchNorm2d(self.d_model),
-                "activation": torch.nn.GELU(),
-                "layer_norm": torch.nn.LayerNorm(self.d_model)
-            })
+        self.patch_embedding_1 = PatchEmbedding(
+            in_channels=image_shape[0],
+            out_channels=self.d_model,
+            kernel_size=4,
+            stride=4
         )
 
-
-        self.patch_embedding_2 = torch.nn.Sequential(
-            OrderedDict({
-                "conv2x2": torch.nn.Conv2d(
-                    in_channels=self.d_model,
-                    out_channels=2 * self.d_model,
-                    kernel_size=2,
-                    stride=2
-                ),
-                "batch_norm": torch.nn.BatchNorm2d(self.d_model),
-                "activation": torch.nn.GELU(),
-                "layer_norm": torch.nn.LayerNorm(self.d_model)
-            })
+        self.patch_embedding_2 = PatchEmbedding(
+            in_channels=self.d_model,
+            out_channels=2 * self.d_model,
+            kernel_size=2,
+            stride=2
         )
 
-        self.patch_embedding_3 = torch.nn.Sequential(
-            OrderedDict({
-                "conv2x2": torch.nn.Conv2d(
-                    in_channels=2 * self.d_model,
-                    out_channels=4 * self.d_model,
-                    kernel_size=2,
-                    stride=2
-                ),
-                "batch_norm": torch.nn.BatchNorm2d(self.d_model),
-                "activation": torch.nn.GELU(),
-                "layer_norm": torch.nn.LayerNorm(self.d_model)
-            })
+        self.patch_embedding_3 = PatchEmbedding(
+            in_channels=2 * self.d_model,
+            out_channels=4 * self.d_model,
+            kernel_size=2,
+            stride=2
         )
 
-        self.patch_embedding_4 = torch.nn.Sequential(
-            OrderedDict({
-                "conv2x2": torch.nn.Conv2d(
-                    in_channels=4 * self.d_model,
-                    out_channels=8 * self.d_model,
-                    kernel_size=2,
-                    stride=2
-                ),
-                "batch_norm": torch.nn.BatchNorm2d(self.d_model),
-                "activation": torch.nn.GELU(),
-                "layer_norm": torch.nn.LayerNorm(self.d_model)
-            })
+        self.patch_embedding_4 = PatchEmbedding(
+            in_channels=4 * self.d_model,
+            out_channels=8 * self.d_model,
+            kernel_size=2,
+            stride=2
         )
 
         # Different stages of DAT architecture
-        self.stage1 = torch.nn.Sequential(
-            OrderedDict({
-                "local_attention": MultiHeadAttention(self.d_model, nhead),
-                "shift_window_attention": ShifedtWindowAttention(self.d_model, nhead)
-            })
-        )
-        self.stage2 = torch.nn.Sequential(
-            OrderedDict({
-                "local_attention": MultiHeadAttention(2 * self.d_model, nhead),
-                "shift_window_attention": ShiftedWindowAttention(2 * self.d_model, nhead)
-            })
-        )
-        self.stage3 = torch.nn.Sequential(
-            OrderedDict({
-                "local_attention": MultiHeadAttention(4 * self.d_model, nhead),
-                "deformable_attention": DeformableAttentionModule(4 * self.d_model, nhead)
-            })
-        )
-        self.stage4 = torch.nn.Sequential(
-            OrderedDict({
-                "local_attention": MultiHeadAttention(8 * self.d_model, nhead),
-                "deformable_attention": DeformableAttentionModule(8 * self.d_model, nhead)
-            })
-        )
-
-        # Deformable Attention Layer
-        self.deformable_attention = DeformableAttention(self.d_model, nhead)
+        self.stage1 = ShiftedWindowAttentionStage(d_model=self.d_model, nhead=self.nhead, window_size=7, shift_size=3)
+        self.stage2 = ShiftedWindowAttentionStage(d_model=2 * self.d_model, nhead=self.nhead, window_size=7, shift_size=3)
+        self.stage3 = DeformableAttentionStage(d_model=4 * self.d_model, nhead=self.nhead)
+        self.stage4 = DeformableAttentionStage(d_model=8 * self.d_model, nhead=self.nhead)
 
         # Classifier head
         self.classifier = torch.nn.Linear(8 * self.d_model, num_classes)
-
-        # Initialize layer parameters
-        initialize_parameters(self)
+        self.final_activation = torch.nn.Softmax(dim=-1)
+        torch.nn.init.xavier_uniform_(self.classifier.weight)
 
     def forward(self, x):
         # Generate image patches
         patches = self.generate_image_patches(x)
 
-        # Patch embedding
-
-
-        attn_output, _ = self.deformable_attention(features)
+        # Run through different stages of DAT
+        x = self.patch_embedding_1(patches)
+        x = self.stage1(x)
+        x = self.patch_embedding_2(x)
+        x = self.stage2(x)
+        x = self.patch_embedding_3(x)
+        x = self.stage3(x)
+        x = self.patch_embedding_4(x)
+        x = self.stage4(x)
 
         # Take the mean across the sequence length dimension
-        pooled_output = attn_output.mean(dim=0)
-        logits = self.classifier(pooled_output)
-        return logits
+        logits = self.classifier(x)
+        return self.final_activation(logits)
